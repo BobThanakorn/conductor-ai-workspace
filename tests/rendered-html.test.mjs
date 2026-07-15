@@ -5,10 +5,11 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("builds the Conductor workspace shell", async () => {
-  const [page, layout, workspace, builtManifest] = await Promise.all([
+  const [page, layout, workspace, workspaceRoute, builtManifest] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/workspace-client.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/workspace/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../dist/server/.vite/manifest.json", import.meta.url), "utf8"),
   ]);
 
@@ -18,7 +19,11 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(workspace, /Context inspector/);
   assert.match(workspace, /Approval required/);
   assert.match(workspace, /TASK TERMINAL/);
+  assert.match(workspace, /fileTree/);
+  assert.match(workspace, /eventStream/);
+  assert.match(workspaceRoute, /afterSequence/);
   assert.doesNotMatch(workspace, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
+  assert.doesNotMatch(workspace, /Test runner started|Single-use capability issued/i);
   assert.ok(Object.keys(JSON.parse(builtManifest)).length > 0);
 });
 

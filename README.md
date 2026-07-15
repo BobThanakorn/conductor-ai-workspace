@@ -9,11 +9,13 @@ production-shaped vertical slice of the approved AI Environment System.
 - IDE-style workspace with files, diffs, task state, agent activity, context,
   approvals, Git review, and validation output.
 - Durable D1-backed tasks, approvals, and append-only task events.
+- Cursor-based incremental task-event synchronization for the workspace UI.
 - An OpenAI Agents SDK boundary with a deterministic demo mode when no API key
-  is configured.
+  is configured, plus structured proposal normalization that redacts
+  sensitive-looking output and raises side-effect proposals to human approval.
 - Exact approval and idempotency contracts for persistent actions.
 - A local-companion foundation for workspace path validation and typed,
-  read-only Git operations.
+  read-only Git operations, with runtime tests for traversal and output limits.
 - Cloudflare/Vinext deployment through OpenAI Sites.
 
 This is intentionally not the final autonomous system. Write-capable local
@@ -47,6 +49,8 @@ surface.
 - Model output is treated as a proposal, never authorization.
 - The browser never receives model or provider credentials.
 - Approval decisions are bound to task state and idempotency keys.
+- Recording an approval never executes a command; actual execution remains a
+  separately bound companion capability.
 - Repository and tool content is treated as untrusted evidence.
 - The companion foundation has no generic-shell or write capability.
 - Hidden chain-of-thought is not requested or persisted.

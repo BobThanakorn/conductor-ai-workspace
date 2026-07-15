@@ -3,6 +3,7 @@
 import {
   FormEvent,
   KeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -32,44 +33,204 @@ type DiffLine = {
 };
 
 type WorkspaceMeta = {
+  id: string;
   name: string;
   repository: string;
+  repositoryPath: string;
   branch: string;
   baseBranch: string;
+  baseSha: string;
+  headSha: string;
+  network: string;
+  runner: string;
   taskId: string;
   taskTitle: string;
+  taskStatus: string;
+  taskProgress: number;
+  model: string;
+};
+
+type FileTreeNode = {
+  id: string;
+  name: string;
+  type: "directory" | "file";
+  status?: string;
+  children?: FileTreeNode[];
+};
+
+type WorkspaceDiff = {
+  file: string;
+  status?: string;
+  additions: number;
+  deletions: number;
+  checks: string[];
+  baseSha?: string;
+  headSha?: string;
+  hunks: Array<{
+    header: string;
+    lines: Array<{
+      type: "context" | "added" | "removed";
+      oldNumber: number | null;
+      newNumber: number | null;
+      content: string;
+    }>;
+  }>;
+};
+
+type WorkspaceContext = {
+  strategy: string;
+  indexedFiles: number;
+  indexedSymbols: number;
+  snapshot: string;
+  tokenBudget: { used: number; limit: number };
+  sources: string[];
+  freshness: string;
+};
+
+type WorkspaceApproval = {
+  id: string;
+  taskId?: string;
+  action: string;
+  summary: string;
+  riskLevel: string;
+  status: string;
+  details: Record<string, unknown>;
+  actionDigest?: string;
+  expiresAt?: string;
 };
 
 type WorkspaceApiResponse = {
-  workspace?: Partial<{
+  workspace?: {
+    id?: string;
     name: string;
-    repository: string | { name?: string };
-    repo: string;
+    repository?: string | {
+      name?: string;
+      path?: string;
+      defaultBranch?: string;
+      activeBranch?: string;
+      baseSha?: string;
+      headSha?: string;
+    };
+    repo?: string;
+    branch?: string;
+    baseBranch?: string;
+    taskId?: string;
+    taskTitle?: string;
+    environment?: { runner?: string; network?: string };
+  };
+  activeTask?: Partial<{
+    id: string;
+    title: string;
+    goal: string;
+    status: string;
+    progress: number;
+    model: string;
     branch: string;
-    baseBranch: string;
-    taskId: string;
-    taskTitle: string;
-  }>;
-  tasks?: Array<Partial<{ id: string; title: string; status: string }>>;
-  approvals?: Array<Partial<{ id: string; status: string }>>;
+  }> | null;
+  tasks?: Array<Partial<{
+    id: string;
+    title: string;
+    status: string;
+    progress: number;
+    model: string;
+    branch: string;
+  }>>;
+  approvals?: WorkspaceApproval[];
+  pendingApprovals?: WorkspaceApproval[];
   events?: Array<
     Partial<{
+      sequence: number;
       id: string;
       title: string;
       detail: string;
+      summary: string;
+      type: string;
       createdAt: string;
       state: EventState;
     }>
   >;
+  fileTree?: FileTreeNode[];
+  diff?: WorkspaceDiff;
+  context?: WorkspaceContext;
+  eventStream?: { endpoint?: string; afterSequence?: number };
 };
 
 const INITIAL_WORKSPACE: WorkspaceMeta = {
+  id: "workspace_atlas",
   name: "Atlas Engineering",
   repository: "openframe/atlas-web",
+  repositoryPath: "/workspace/atlas-web",
   branch: "agent/harden-session-validation",
   baseBranch: "main",
+  baseSha: "9f3a1c79d4b2",
+  headSha: "c6a174b5a1f3",
+  network: "Blocked",
+  runner: "Cloudflare isolated workspace",
   taskId: "task_harden_sessions",
   taskTitle: "Harden session validation",
+  taskStatus: "waiting_for_approval",
+  taskProgress: 64,
+  model: "gpt-5.3-codex",
+};
+
+const INITIAL_FILE_TREE: FileTreeNode[] = [
+  {
+    id: "src",
+    name: "src",
+    type: "directory",
+    children: [
+      {
+        id: "src/agent",
+        name: "agent",
+        type: "directory",
+        children: [
+          { id: "src/agent/workspace-agent.ts", name: "workspace-agent.ts", type: "file", status: "modified" },
+          { id: "src/agent/context.ts", name: "context.ts", type: "file" },
+          { id: "src/agent/types.ts", name: "types.ts", type: "file" },
+        ],
+      },
+      {
+        id: "src/policy",
+        name: "policy",
+        type: "directory",
+        children: [
+          { id: "src/policy/policy.ts", name: "policy.ts", type: "file", status: "modified" },
+          { id: "src/policy/types.ts", name: "types.ts", type: "file" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "tests",
+    name: "tests",
+    type: "directory",
+    children: [
+      { id: "tests/approval.test.ts", name: "approval.test.ts", type: "file", status: "added" },
+      { id: "tests/context.test.ts", name: "context.test.ts", type: "file" },
+    ],
+  },
+  { id: "package.json", name: "package.json", type: "file" },
+  { id: "README.md", name: "README.md", type: "file" },
+];
+
+const INITIAL_CONTEXT: WorkspaceContext = {
+  strategy: "hybrid lexical + semantic + symbol graph",
+  indexedFiles: 1842,
+  indexedSymbols: 12744,
+  snapshot: "8f2c1d7",
+  tokenBudget: { used: 6842, limit: 24000 },
+  sources: ["src/agent/workspace-agent.ts", "src/policy/policy.ts", "tests/approval.test.ts", "SECURITY.md"],
+  freshness: "current worktree snapshot",
+};
+
+const INITIAL_APPROVAL: WorkspaceApproval = {
+  id: "approval-test-suite-01",
+  taskId: "task_harden_sessions",
+  action: "run_tests",
+  summary: "Run the repository test suite in the isolated task worktree.",
+  riskLevel: "R1",
+  status: "pending",
+  details: { command: "npm test -- --runInBand", reversible: true },
 };
 
 const INITIAL_TIMELINE: TimelineEvent[] = [
@@ -237,22 +398,14 @@ const DIFF_CONTENT: Record<string, DiffLine[]> = {
 };
 
 const TERMINAL_LINES = [
-  { type: "muted", text: "$ npm test -- --runInBand" },
+  { type: "muted", text: "$ validation evidence summary" },
   { type: "muted", text: "" },
-  { type: "info", text: " RUN  v2.1.5  /workspace/acme-relay" },
-  { type: "success", text: " ✓ tests/context.test.ts       (4 tests)  31ms" },
-  { type: "success", text: " ✓ tests/policy.test.ts        (5 tests)  46ms" },
-  { type: "pending", text: " ◌ tests/approval.test.ts      awaiting approval" },
+  { type: "info", text: " EVIDENCE  workspace snapshot attached to this task" },
+  { type: "success", text: " ✓ unit tests                 24 passed (reported evidence)" },
+  { type: "success", text: " ✓ TypeScript                 passed (reported evidence)" },
+  { type: "pending", text: " ◌ local command execution    companion not connected" },
   { type: "muted", text: "" },
-  { type: "summary", text: " Test Files  2 passed | 1 pending" },
-  { type: "summary", text: "      Tests  9 passed | 3 pending" },
-];
-
-const SOURCE_ITEMS = [
-  { label: "workspace-agent.ts", detail: "lines 1–21", score: "98%" },
-  { label: "policy.ts", detail: "lines 7–17", score: "94%" },
-  { label: "approval.test.ts", detail: "new file", score: "91%" },
-  { label: "SECURITY.md", detail: "approval model", score: "87%" },
+  { type: "summary", text: " No local, Git, network, or provider action was executed by this UI." },
 ];
 
 function nowTime() {
@@ -273,13 +426,60 @@ function eventStateFromApi(value: unknown): EventState {
     : "complete";
 }
 
+function collectDirectories(nodes: FileTreeNode[], target = new Set<string>()) {
+  for (const node of nodes) {
+    if (node.type === "directory") {
+      target.add(node.id);
+      if (node.children) collectDirectories(node.children, target);
+    }
+  }
+  return target;
+}
+
+function collectChangedFiles(nodes: FileTreeNode[], target: FileTreeNode[] = []) {
+  for (const node of nodes) {
+    if (node.type === "directory") collectChangedFiles(node.children ?? [], target);
+    else if (node.status && node.status !== "unchanged") target.push(node);
+  }
+  return target;
+}
+
+function apiDiffLines(diff: WorkspaceDiff): DiffLine[] {
+  return diff.hunks.flatMap((hunk) => [
+    { kind: "fold" as const, content: hunk.header },
+    ...hunk.lines.map((line) => ({
+      oldLine: line.oldNumber ?? undefined,
+      newLine: line.newNumber ?? undefined,
+      kind: line.type === "added"
+        ? "addition" as const
+        : line.type === "removed"
+          ? "deletion" as const
+          : "context" as const,
+      content: line.content,
+    })),
+  ]);
+}
+
+function sourceLabel(path: string, index: number) {
+  const parts = path.split("/");
+  return {
+    label: parts.at(-1) ?? path,
+    detail: parts.length > 1 ? parts.slice(0, -1).join("/") : "repository root",
+    score: `${Math.max(78, 98 - index * 4)}%`,
+  };
+}
+
 export default function WorkspaceClient() {
   const [workspace, setWorkspace] = useState(INITIAL_WORKSPACE);
   const [apiState, setApiState] = useState<ApiState>("connecting");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
   const [bottomPanel, setBottomPanel] = useState<BottomPanel>("terminal");
   const [activeFile, setActiveFile] = useState("src/agent/workspace-agent.ts");
-  const [folders, setFolders] = useState(() => new Set(["src", "agent", "policy", "tests"]));
+  const [fileTree, setFileTree] = useState<FileTreeNode[]>(INITIAL_FILE_TREE);
+  const [serverDiff, setServerDiff] = useState<WorkspaceDiff | null>(null);
+  const [context, setContext] = useState<WorkspaceContext>(INITIAL_CONTEXT);
+  const [activeApproval, setActiveApproval] = useState<WorkspaceApproval | null>(INITIAL_APPROVAL);
+  const [folders, setFolders] = useState(() => collectDirectories(INITIAL_FILE_TREE));
   const [timeline, setTimeline] = useState(INITIAL_TIMELINE);
   const [approval, setApproval] = useState<ApprovalState>("pending");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -288,42 +488,81 @@ export default function WorkspaceClient() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [terminalLines, setTerminalLines] = useState(TERMINAL_LINES);
-  const [acceptedFiles, setAcceptedFiles] = useState(() => new Set([
-    "src/agent/workspace-agent.ts",
-    "src/policy/policy.ts",
-    "tests/approval.test.ts",
-  ]));
+  const [acceptedFiles, setAcceptedFiles] = useState(() =>
+    new Set(collectChangedFiles(INITIAL_FILE_TREE).map((file) => file.id)),
+  );
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const loadWorkspace = useCallback(async (silent = false, signal?: AbortSignal) => {
+    if (!silent) setApiState("connecting");
+    try {
+      const response = await fetch("/api/workspace", { cache: "no-store", signal });
+      if (!response.ok) throw new Error("Workspace unavailable");
 
-    async function loadWorkspace() {
-      try {
-        const response = await fetch("/api/workspace", {
-          cache: "no-store",
-          signal: controller.signal,
+      const data = (await response.json()) as WorkspaceApiResponse;
+      const remote = data.workspace;
+      const repository = remote && typeof remote.repository === "object"
+        ? remote.repository
+        : undefined;
+      const primaryTask = data.activeTask ?? data.tasks?.[0];
+
+      setWorkspace((current) => ({
+        id: remote?.id || current.id,
+        name: remote?.name || current.name,
+        repository: typeof remote?.repository === "string"
+          ? remote.repository
+          : repository?.name || remote?.repo || current.repository,
+        repositoryPath: repository?.path || current.repositoryPath,
+        branch: primaryTask?.branch || repository?.activeBranch || remote?.branch || current.branch,
+        baseBranch: repository?.defaultBranch || remote?.baseBranch || current.baseBranch,
+        baseSha: repository?.baseSha || current.baseSha,
+        headSha: repository?.headSha || current.headSha,
+        network: remote?.environment?.network || current.network,
+        runner: remote?.environment?.runner || current.runner,
+        taskId: primaryTask?.id || remote?.taskId || current.taskId,
+        taskTitle: primaryTask?.title || remote?.taskTitle || current.taskTitle,
+        taskStatus: primaryTask?.status || current.taskStatus,
+        taskProgress: typeof primaryTask?.progress === "number" ? primaryTask.progress : current.taskProgress,
+        model: primaryTask?.model || current.model,
+      }));
+
+      if (data.fileTree) {
+        setFileTree(data.fileTree);
+        setFolders(collectDirectories(data.fileTree));
+        const changed = collectChangedFiles(data.fileTree);
+        setAcceptedFiles(new Set(changed.map((file) => file.id)));
+        const fileIds = new Set<string>();
+        const visit = (nodes: FileTreeNode[]) => nodes.forEach((node) => {
+          if (node.type === "file") fileIds.add(node.id);
+          else visit(node.children ?? []);
         });
-        if (!response.ok) throw new Error("Workspace unavailable");
+        visit(data.fileTree);
+        setActiveFile((current) => fileIds.has(current) ? current : data.diff?.file || changed[0]?.id || current);
+      }
+      if (data.diff) setServerDiff(data.diff);
+      if (data.context) setContext(data.context);
 
-        const data = (await response.json()) as WorkspaceApiResponse;
-        const remote = data.workspace ?? {};
-        const primaryTask = data.tasks?.[0];
-        setWorkspace((current) => ({
-          name: remote.name || current.name,
-          repository: typeof remote.repository === "string"
-            ? remote.repository
-            : remote.repository?.name || remote.repo || current.repository,
-          branch: remote.branch || current.branch,
-          baseBranch: remote.baseBranch || current.baseBranch,
-          taskId: remote.taskId || primaryTask?.id || current.taskId,
-          taskTitle: remote.taskTitle || primaryTask?.title || current.taskTitle,
-        }));
+      if (data.approvals) {
+        const remoteApproval = data.pendingApprovals?.[0] ?? data.approvals[0] ?? null;
+        setActiveApproval(remoteApproval);
+        if (remoteApproval) {
+          setApproval(
+            remoteApproval.status === "approved"
+              ? "approved"
+              : remoteApproval.status === "rejected" || remoteApproval.status === "denied"
+                ? "denied"
+                : "pending",
+          );
+        } else setApproval("approved");
+      }
 
-        if (data.events?.length) {
-          const apiEvents = data.events.slice(-8).map((event, index) => ({
+      if (data.events) {
+        const apiEvents = [...data.events]
+          .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+          .slice(-8)
+          .map((event, index) => ({
             id: event.id || `remote-event-${index}`,
-            title: event.title || "Workspace event",
-            detail: event.detail || "Recorded by the orchestrator",
+            title: event.title || event.type?.replaceAll(".", " ") || "Workspace event",
+            detail: event.detail || event.summary || "Recorded by the orchestrator",
             time: event.createdAt
               ? new Date(event.createdAt).toLocaleTimeString([], {
                   hour: "2-digit",
@@ -333,23 +572,31 @@ export default function WorkspaceClient() {
               : "now",
             state: eventStateFromApi(event.state),
           }));
-          setTimeline(apiEvents);
-        }
-
-        const remoteApproval = data.approvals?.find((item) => item.status === "pending");
-        if (!remoteApproval && data.approvals?.length) {
-          const latest = data.approvals[0]?.status;
-          if (latest === "approved" || latest === "denied") setApproval(latest);
-        }
-        setApiState("connected");
-      } catch (error) {
-        if ((error as Error).name !== "AbortError") setApiState("preview");
+        setTimeline(apiEvents);
       }
-    }
 
-    void loadWorkspace();
-    return () => controller.abort();
+      setApiState("connected");
+    } catch (error) {
+      if ((error as Error).name !== "AbortError") setApiState("preview");
+    }
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const initialLoad = window.setTimeout(() => {
+      void loadWorkspace(false, controller.signal);
+    }, 0);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadWorkspace(true, controller.signal);
+      }
+    }, 15_000);
+    return () => {
+      controller.abort();
+      window.clearTimeout(initialLoad);
+      window.clearInterval(interval);
+    };
+  }, [loadWorkspace]);
 
   useEffect(() => {
     function closePanels(event: globalThis.KeyboardEvent) {
@@ -362,14 +609,28 @@ export default function WorkspaceClient() {
     return () => window.removeEventListener("keydown", closePanels);
   }, []);
 
-  const currentDiff = useMemo(
-    () => DIFF_CONTENT[activeFile] ?? DIFF_CONTENT["src/agent/workspace-agent.ts"],
-    [activeFile],
-  );
-  const currentCode = useMemo(
-    () => FILE_CONTENT[activeFile] ?? FILE_CONTENT["src/agent/workspace-agent.ts"],
-    [activeFile],
-  );
+  const currentDiff = useMemo(() => {
+    if (serverDiff?.file === activeFile) return apiDiffLines(serverDiff);
+    return DIFF_CONTENT[activeFile] ?? [{ kind: "fold", content: "No diff is available for this file." }];
+  }, [activeFile, serverDiff]);
+  const currentCode = useMemo(() => {
+    if (serverDiff?.file === activeFile) {
+      return serverDiff.hunks.flatMap((hunk) =>
+        hunk.lines.filter((line) => line.type !== "removed").map((line) => line.content),
+      );
+    }
+    return FILE_CONTENT[activeFile] ?? [
+      `// ${activeFile}`,
+      "",
+      "// Source contents are not included in the current workspace snapshot.",
+    ];
+  }, [activeFile, serverDiff]);
+  const changedFiles = useMemo(() => collectChangedFiles(fileTree), [fileTree]);
+  const contextSources = useMemo(() => context.sources.map(sourceLabel), [context.sources]);
+  const contextPercent = Math.min(100, Math.round((context.tokenBudget.used / Math.max(1, context.tokenBudget.limit)) * 100));
+  const activeDiffStats = serverDiff?.file === activeFile
+    ? { additions: serverDiff.additions, deletions: serverDiff.deletions }
+    : { additions: 24, deletions: 6 };
 
   function showNotice(message: string) {
     setNotice(message);
@@ -413,6 +674,7 @@ export default function WorkspaceClient() {
       });
       if (!response.ok) throw new Error("Action unavailable");
       setApiState("connected");
+      await loadWorkspace(true);
     } catch {
       setApiState("preview");
     } finally {
@@ -428,34 +690,33 @@ export default function WorkspaceClient() {
         event.id === "event-4"
           ? {
               ...event,
-              title: decision === "approve" ? "Execution approved" : "Execution denied",
+              title: decision === "approve" ? "Approval recorded" : "Execution denied",
               detail:
                 decision === "approve"
-                  ? "Single-use capability issued for the test runner"
+                  ? "No command ran; a companion must submit a separately bound execution request"
                   : "No command was executed",
               time: nowTime(),
               state: "complete",
             }
           : event.id === "event-5" && decision === "approve"
-            ? { ...event, state: "active", detail: "Test runner started in sandbox" }
+            ? { ...event, state: "waiting", detail: "Awaiting a separately bound companion execution request" }
             : event,
       ),
     );
 
     if (decision === "approve") {
       setTerminalLines((lines) => [
-        ...lines.filter((line) => !line.text.includes("awaiting approval")),
-        { type: "success", text: " ✓ tests/approval.test.ts      (3 tests)  28ms" },
-        { type: "muted", text: "" },
-        { type: "complete", text: " Test Files  3 passed (3)  ·  105ms" },
+        ...lines,
+        { type: "pending", text: " ◌ approval recorded · no command was executed" },
       ]);
-      showNotice("Approved once · test runner capability expires in 5 minutes");
+      showNotice("Approval recorded · no command ran from this workspace UI");
     } else {
       showNotice("Request denied · no command was executed");
     }
 
     await postWorkspaceAction(decision === "approve" ? "approve" : "reject", {
-      approvalId: "approval_apply_session_patch",
+      approvalId: activeApproval?.id ?? "approval_apply_session_patch",
+      workspaceId: workspace.id,
     });
   }
 
@@ -496,11 +757,13 @@ export default function WorkspaceClient() {
         body: JSON.stringify({
           message,
           taskId: workspace.taskId,
+          workspaceId: workspace.id,
           idempotencyKey: `agent-${Date.now()}`,
         }),
       });
       if (!response.ok) throw new Error("Agent unavailable");
       setApiState("connected");
+      await loadWorkspace(true);
       showNotice("Conductor is working on your follow-up");
     } catch {
       setApiState("preview");
@@ -524,6 +787,17 @@ export default function WorkspaceClient() {
       : apiState === "connecting"
         ? "Connecting"
         : "Local preview";
+  const approvalCommand = typeof activeApproval?.details.command === "string"
+    ? activeApproval.details.command
+    : activeApproval?.action === "apply_patch"
+      ? `apply patch · ${Array.isArray(activeApproval.details.files) ? activeApproval.details.files.length : 0} files`
+      : activeApproval?.action.replaceAll("_", " ") || "No action pending";
+  const approvalExpiry = activeApproval?.expiresAt
+    ? `at ${new Date(activeApproval.expiresAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`
+    : "5 minutes";
 
   return (
     <div className="conductor" data-testid="conductor-workspace">
@@ -543,7 +817,7 @@ export default function WorkspaceClient() {
           <span className="brand-name">Conductor</span>
           <span className="topbar-rule" aria-hidden="true" />
           <div className="repository-crumb" aria-label="Current repository">
-            <span className="repo-owner">acme</span>
+            <span className="repo-owner">{workspace.repository.split("/").slice(0, -1).join("/") || "local"}</span>
             <span className="crumb-slash">/</span>
             <strong>{workspace.repository.split("/").at(-1)}</strong>
           </div>
@@ -595,73 +869,28 @@ export default function WorkspaceClient() {
             <span className="eyebrow">Explorer</span>
             <div className="panel-actions">
               <button type="button" aria-label="Create file">＋</button>
-              <button type="button" aria-label="Refresh files">↻</button>
+              <button type="button" aria-label="Refresh files" onClick={() => void loadWorkspace(true)}>↻</button>
               <button type="button" aria-label="More explorer actions">•••</button>
             </div>
           </div>
 
           <button className="repo-heading" type="button" onClick={() => toggleFolder("root")}>
             <span className="tree-chevron open" aria-hidden="true">⌄</span>
-            <strong>ACME-RELAY</strong>
-            <span className="change-count">3</span>
+            <strong>{workspace.repository.split("/").at(-1)?.toUpperCase()}</strong>
+            <span className="change-count">{changedFiles.length}</span>
           </button>
 
           <nav className="file-tree" aria-label="Repository files" data-testid="file-tree">
-            <TreeFolder label="src" open={folders.has("src")} onToggle={() => toggleFolder("src")} />
-            {folders.has("src") && (
-              <div className="tree-children">
-                <TreeFolder label="agent" open={folders.has("agent")} onToggle={() => toggleFolder("agent")} />
-                {folders.has("agent") && (
-                  <div className="tree-children">
-                    <TreeFile
-                      label="workspace-agent.ts"
-                      path="src/agent/workspace-agent.ts"
-                      status="M"
-                      active={activeFile === "src/agent/workspace-agent.ts"}
-                      onSelect={selectFile}
-                    />
-                    <TreeFile label="context.ts" path="src/agent/context.ts" active={false} onSelect={selectFile} />
-                    <TreeFile label="types.ts" path="src/agent/types.ts" active={false} onSelect={selectFile} />
-                  </div>
-                )}
-                <TreeFolder label="git" open={folders.has("git")} onToggle={() => toggleFolder("git")} />
-                {folders.has("git") && (
-                  <div className="tree-children">
-                    <TreeFile label="operations.ts" path="src/git/operations.ts" active={false} onSelect={selectFile} />
-                    <TreeFile label="provider.ts" path="src/git/provider.ts" active={false} onSelect={selectFile} />
-                  </div>
-                )}
-                <TreeFolder label="policy" open={folders.has("policy")} onToggle={() => toggleFolder("policy")} />
-                {folders.has("policy") && (
-                  <div className="tree-children">
-                    <TreeFile
-                      label="policy.ts"
-                      path="src/policy/policy.ts"
-                      status="M"
-                      active={activeFile === "src/policy/policy.ts"}
-                      onSelect={selectFile}
-                    />
-                    <TreeFile label="types.ts" path="src/policy/types.ts" active={false} onSelect={selectFile} />
-                  </div>
-                )}
-              </div>
-            )}
-            <TreeFolder label="tests" open={folders.has("tests")} onToggle={() => toggleFolder("tests")} />
-            {folders.has("tests") && (
-              <div className="tree-children">
-                <TreeFile
-                  label="approval.test.ts"
-                  path="tests/approval.test.ts"
-                  status="A"
-                  active={activeFile === "tests/approval.test.ts"}
-                  onSelect={selectFile}
-                />
-                <TreeFile label="context.test.ts" path="tests/context.test.ts" active={false} onSelect={selectFile} />
-              </div>
-            )}
-            <TreeFile label=".env.example" path=".env.example" active={false} onSelect={selectFile} muted />
-            <TreeFile label="package.json" path="package.json" active={false} onSelect={selectFile} />
-            <TreeFile label="README.md" path="README.md" active={false} onSelect={selectFile} />
+            {fileTree.map((node) => (
+              <TreeNodeView
+                key={node.id}
+                node={node}
+                folders={folders}
+                activeFile={activeFile}
+                onToggle={toggleFolder}
+                onSelect={selectFile}
+              />
+            ))}
           </nav>
 
           <div className="explorer-spacer" />
@@ -670,13 +899,13 @@ export default function WorkspaceClient() {
               <span className="scope-icon" aria-hidden="true">◇</span>
               <div>
                 <strong>Task worktree</strong>
-                <span>Isolated · non-root</span>
+                <span>{workspace.runner}</span>
               </div>
             </div>
             <div className="scope-meter"><span /></div>
             <div className="scope-stats">
-              <span>1.2 GB free</span>
-              <span>expires 54m</span>
+              <span>{workspace.network}</span>
+              <span>task scoped</span>
             </div>
           </section>
           <button className="explorer-footer" type="button">
@@ -690,27 +919,18 @@ export default function WorkspaceClient() {
           <section className="editor-panel" aria-label="Editor and diff viewer">
             <div className="editor-tabs-row">
               <div className="editor-tabs" role="tablist" aria-label="Open files">
-                <EditorTab
-                  label="workspace-agent.ts"
-                  path="src/agent/workspace-agent.ts"
-                  status="M"
-                  active={activeFile === "src/agent/workspace-agent.ts"}
-                  onSelect={selectFile}
-                />
-                <EditorTab
-                  label="policy.ts"
-                  path="src/policy/policy.ts"
-                  status="M"
-                  active={activeFile === "src/policy/policy.ts"}
-                  onSelect={selectFile}
-                />
-                <EditorTab
-                  label="approval.test.ts"
-                  path="tests/approval.test.ts"
-                  status="A"
-                  active={activeFile === "tests/approval.test.ts"}
-                  onSelect={selectFile}
-                />
+                {(changedFiles.length ? changedFiles : [{ id: activeFile, name: fileLabel, type: "file" as const }])
+                  .slice(0, 3)
+                  .map((file) => (
+                    <EditorTab
+                      key={file.id}
+                      label={file.name}
+                      path={file.id}
+                      status={file.status}
+                      active={activeFile === file.id}
+                      onSelect={selectFile}
+                    />
+                  ))}
               </div>
               <div className="view-toggle" role="tablist" aria-label="Editor view">
                 <button
@@ -746,8 +966,8 @@ export default function WorkspaceClient() {
                 ))}
               </div>
               <div className="diff-summary" aria-label="Diff summary">
-                <span className="addition-text">+24</span>
-                <span className="deletion-text">−6</span>
+                <span className="addition-text">+{activeDiffStats.additions}</span>
+                <span className="deletion-text">−{activeDiffStats.deletions}</span>
                 <span className="reviewed-dot" aria-hidden="true" />
                 reviewed
                 <button type="button" aria-label="More editor actions">•••</button>
@@ -834,32 +1054,26 @@ export default function WorkspaceClient() {
                 <div className="git-review-heading">
                   <div>
                     <span className="eyebrow">Ready to review</span>
-                    <strong>{acceptedFiles.size} of 3 files</strong>
+                    <strong>{acceptedFiles.size} of {changedFiles.length} files</strong>
                   </div>
-                  <div className="git-delta"><b>+48</b><span>−12</span></div>
+                  <div className="git-delta">
+                    <b>+{serverDiff?.additions ?? 48}</b>
+                    <span>−{serverDiff?.deletions ?? 12}</span>
+                  </div>
                 </div>
                 <div className="review-files">
-                  <ReviewFile
-                    label="workspace-agent.ts"
-                    path="src/agent/workspace-agent.ts"
-                    delta="+18 −1"
-                    checked={acceptedFiles.has("src/agent/workspace-agent.ts")}
-                    onToggle={toggleAcceptedFile}
-                  />
-                  <ReviewFile
-                    label="policy.ts"
-                    path="src/policy/policy.ts"
-                    delta="+16 −11"
-                    checked={acceptedFiles.has("src/policy/policy.ts")}
-                    onToggle={toggleAcceptedFile}
-                  />
-                  <ReviewFile
-                    label="approval.test.ts"
-                    path="tests/approval.test.ts"
-                    delta="+14"
-                    checked={acceptedFiles.has("tests/approval.test.ts")}
-                    onToggle={toggleAcceptedFile}
-                  />
+                  {changedFiles.map((file) => (
+                    <ReviewFile
+                      key={file.id}
+                      label={file.name}
+                      path={file.id}
+                      delta={file.id === serverDiff?.file
+                        ? `+${serverDiff.additions} −${serverDiff.deletions}`
+                        : file.status === "added" ? "added" : "modified"}
+                      checked={acceptedFiles.has(file.id)}
+                      onToggle={toggleAcceptedFile}
+                    />
+                  ))}
                 </div>
                 <button
                   className="commit-button"
@@ -890,8 +1104,8 @@ export default function WorkspaceClient() {
               />
               <div className="composer-options">
                 <button type="button"><span className="mode-dot" /> Plan & execute <b aria-hidden="true">⌄</b></button>
-                <button type="button">GPT-5 · Coding <b aria-hidden="true">⌄</b></button>
-                <span className="composer-context">12 sources · 29% context</span>
+                <button type="button">{workspace.model} <b aria-hidden="true">⌄</b></button>
+                <span className="composer-context">{context.sources.length} sources · {contextPercent}% context</span>
                 <span className="composer-spacer" />
                 <span className="send-hint"><kbd>⌘</kbd><kbd>↵</kbd></span>
                 <button
@@ -913,15 +1127,23 @@ export default function WorkspaceClient() {
             <div>
               <span className="eyebrow">Active run</span>
               <div className="run-title-row">
-                <strong>Policy guardrails</strong>
-                <span className="run-live"><i aria-hidden="true" /> waiting</span>
+                <strong>{workspace.taskTitle}</strong>
+                <span className="run-live"><i aria-hidden="true" /> {workspace.taskStatus.replaceAll("_", " ")}</span>
               </div>
             </div>
             <button type="button" aria-label="More run actions">•••</button>
           </div>
 
-          <div className="run-progress" aria-label="Task progress: 3 of 5 steps">
-            <span className="done" /><span className="done" /><span className="active" /><span /><span />
+          <div className="run-progress" aria-label={`Task progress: ${workspace.taskProgress}%`}>
+            {Array.from({ length: 5 }, (_, index) => {
+              const threshold = (index + 1) * 20;
+              const className = workspace.taskProgress >= threshold
+                ? "done"
+                : workspace.taskProgress > index * 20
+                  ? "active"
+                  : "";
+              return <span className={className} key={index} />;
+            })}
           </div>
 
           <section className={`approval-card ${approval}`} aria-labelledby="approval-title" data-testid="approval-card">
@@ -930,39 +1152,49 @@ export default function WorkspaceClient() {
                 {approval === "approved" ? "✓" : approval === "denied" ? "×" : "!"}
               </span>
               <div>
-                <span className="eyebrow">{approval === "pending" ? "Your approval" : "Decision recorded"}</span>
+                <span className="eyebrow">
+                  {!activeApproval ? "Policy status" : approval === "pending" ? "Your approval" : "Decision recorded"}
+                </span>
                 <h2 id="approval-title">
-                  {approval === "pending"
-                    ? "Run repository tests?"
+                  {!activeApproval
+                    ? "No approval pending"
+                    : approval === "pending"
+                    ? activeApproval.action.replaceAll("_", " ")
                     : approval === "approved"
-                      ? "Approved once"
+                      ? "Approval recorded"
                       : "Execution denied"}
                 </h2>
               </div>
-              <span className="risk-pill">R1 · local</span>
+              <span className="risk-pill">{activeApproval?.riskLevel ?? "R0"} · local</span>
             </div>
 
             <p>
-              {approval === "pending"
-                ? "The agent wants to execute a bounded command inside this task’s isolated worktree."
+              {!activeApproval
+                ? "The current run has no side-effecting action waiting for a human decision."
+                : approval === "pending"
+                ? activeApproval.summary
                 : approval === "approved"
-                  ? "A single-use capability was issued. It cannot be reused for a changed command or snapshot."
+                  ? "Approval was recorded. No command has been executed; a separately bound companion request is still required."
                   : "No capability was issued and the command did not run."}
             </p>
 
             <div className="command-preview">
               <span aria-hidden="true">$</span>
-              <code>npm test -- --runInBand</code>
-              <button type="button" aria-label="Copy command">Copy</button>
+              <code>{approvalCommand}</code>
+              <button
+                type="button"
+                aria-label="Copy action preview"
+                onClick={() => void navigator.clipboard?.writeText(approvalCommand)}
+              >Copy</button>
             </div>
 
             <dl className="approval-facts">
-              <div><dt>Scope</dt><dd>/workspace/acme-relay</dd></div>
-              <div><dt>Network</dt><dd>Blocked</dd></div>
-              <div><dt>Expires</dt><dd>5 minutes</dd></div>
+              <div><dt>Scope</dt><dd>{workspace.repositoryPath}</dd></div>
+              <div><dt>Network</dt><dd>{workspace.network}</dd></div>
+              <div><dt>Expires</dt><dd>{approvalExpiry}</dd></div>
             </dl>
 
-            {approval === "pending" ? (
+            {activeApproval && approval === "pending" ? (
               <div className="approval-actions">
                 <button
                   className="deny-button"
@@ -985,8 +1217,8 @@ export default function WorkspaceClient() {
                 </button>
               </div>
             ) : (
-              <button className="reset-approval" type="button" onClick={() => setApproval("pending")}>
-                Review request again
+              <button className="reset-approval" type="button" onClick={() => void loadWorkspace(true)}>
+                Refresh policy state
               </button>
             )}
           </section>
@@ -997,7 +1229,7 @@ export default function WorkspaceClient() {
                 <span className="eyebrow">Agent activity</span>
                 <h2 id="timeline-title">Run timeline</h2>
               </div>
-              <span className="elapsed">1m 26s</span>
+              <span className="elapsed">{timeline.length} events</span>
             </div>
             <ol className="timeline-list">
               {timeline.map((event) => (
@@ -1023,16 +1255,16 @@ export default function WorkspaceClient() {
                 <span className="eyebrow">Grounding</span>
                 <h2 id="context-title">Context inspector</h2>
               </div>
-              <button type="button" aria-label="Refresh context">↻</button>
+              <button type="button" aria-label="Refresh context" onClick={() => void loadWorkspace(true)}>↻</button>
             </div>
 
             <div className="token-card">
               <div className="token-copy">
-                <strong>6,842</strong>
-                <span>of 24k input tokens</span>
-                <b>29%</b>
+                <strong>{context.tokenBudget.used.toLocaleString()}</strong>
+                <span>of {Math.round(context.tokenBudget.limit / 1000)}k input tokens</span>
+                <b>{contextPercent}%</b>
               </div>
-              <div className="token-meter"><span /></div>
+              <div className="token-meter"><span style={{ width: `${contextPercent}%` }} /></div>
               <div className="token-legend">
                 <span><i className="policy-color" /> policy</span>
                 <span><i className="source-color" /> sources</span>
@@ -1045,9 +1277,9 @@ export default function WorkspaceClient() {
               <button type="button">View manifest</button>
             </div>
             <ul className="source-list">
-              {SOURCE_ITEMS.map((source, index) => (
+              {contextSources.map((source) => (
                 <li key={source.label}>
-                  <span className="source-file-icon">{index === 3 ? "MD" : "TS"}</span>
+                  <span className="source-file-icon">{source.label.endsWith(".md") ? "MD" : source.label.split(".").at(-1)?.toUpperCase().slice(0, 2) || "F"}</span>
                   <div><strong>{source.label}</strong><span>{source.detail}</span></div>
                   <b>{source.score}</b>
                 </li>
@@ -1055,8 +1287,8 @@ export default function WorkspaceClient() {
             </ul>
             <div className="snapshot-row">
               <span><i aria-hidden="true" /> snapshot</span>
-              <code>8f2c1d7</code>
-              <b>fresh</b>
+              <code>{context.snapshot}</code>
+              <b>{context.freshness}</b>
             </div>
           </section>
 
@@ -1070,7 +1302,7 @@ export default function WorkspaceClient() {
             >
               {busyAction === "run_checks" ? "Queueing…" : "Run checks"}
             </button>
-            <button className="stop-action" type="button" onClick={() => void postWorkspaceAction("cancel", { taskId: workspace.taskId })}>
+            <button className="stop-action" type="button" onClick={() => void postWorkspaceAction("cancel", { taskId: workspace.taskId, workspaceId: workspace.id })}>
               Stop run
             </button>
           </div>
@@ -1079,6 +1311,54 @@ export default function WorkspaceClient() {
 
       {notice && <div className="notice-toast" role="status">✓ <span>{notice}</span></div>}
     </div>
+  );
+}
+
+function TreeNodeView({
+  node,
+  folders,
+  activeFile,
+  onToggle,
+  onSelect,
+}: {
+  node: FileTreeNode;
+  folders: Set<string>;
+  activeFile: string;
+  onToggle: (path: string) => void;
+  onSelect: (path: string) => void;
+}) {
+  if (node.type === "file") {
+    return (
+      <TreeFile
+        label={node.name}
+        path={node.id}
+        status={node.status}
+        active={activeFile === node.id}
+        onSelect={onSelect}
+        muted={node.name.startsWith(".env")}
+      />
+    );
+  }
+
+  const open = folders.has(node.id);
+  return (
+    <>
+      <TreeFolder label={node.name} open={open} onToggle={() => onToggle(node.id)} />
+      {open && node.children?.length ? (
+        <div className="tree-children">
+          {node.children.map((child) => (
+            <TreeNodeView
+              key={child.id}
+              node={child}
+              folders={folders}
+              activeFile={activeFile}
+              onToggle={onToggle}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -1102,12 +1382,13 @@ function TreeFile({
 }: {
   label: string;
   path: string;
-  status?: "M" | "A";
+  status?: string;
   active: boolean;
   onSelect: (path: string) => void;
   muted?: boolean;
 }) {
   const extension = label.endsWith(".json") ? "{}" : label.endsWith(".md") ? "#" : label.endsWith(".env.example") ? "·" : "TS";
+  const shortStatus = status === "modified" ? "M" : status === "added" ? "A" : status?.slice(0, 1).toUpperCase();
   return (
     <button
       className={`tree-row file-row ${active ? "active" : ""} ${muted ? "muted" : ""}`}
@@ -1118,7 +1399,7 @@ function TreeFile({
     >
       <span className={`file-icon ext-${extension.replace(/\W/g, "")}`} aria-hidden="true">{extension}</span>
       <span className="tree-file-label">{label}</span>
-      {status && <span className={`file-status ${status === "A" ? "added" : ""}`}>{status}</span>}
+      {shortStatus && <span className={`file-status ${shortStatus === "A" ? "added" : ""}`}>{shortStatus}</span>}
     </button>
   );
 }
@@ -1132,10 +1413,11 @@ function EditorTab({
 }: {
   label: string;
   path: string;
-  status: "M" | "A";
+  status?: string;
   active: boolean;
   onSelect: (path: string) => void;
 }) {
+  const shortStatus = status === "modified" ? "M" : status === "added" ? "A" : status?.slice(0, 1).toUpperCase();
   return (
     <button
       className={`editor-tab ${active ? "active" : ""}`}
@@ -1146,7 +1428,7 @@ function EditorTab({
     >
       <span className="tab-language">TS</span>
       <span>{label}</span>
-      <i className={status === "A" ? "added" : ""}>{status}</i>
+      {shortStatus && <i className={shortStatus === "A" ? "added" : ""}>{shortStatus}</i>}
       <b aria-hidden="true">×</b>
     </button>
   );

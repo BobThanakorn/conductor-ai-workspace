@@ -403,6 +403,52 @@ function mapEvent(row: EventRow) {
   };
 }
 
+export async function loadWorkspaceEvents(
+  database: D1Database,
+  workspaceId: string,
+  options: { afterSequence?: number; limit: number; taskId?: string },
+) {
+  const afterSequence = options.afterSequence ?? 0;
+  const requestedLimit = Math.min(Math.max(options.limit, 1), 100);
+  const eventStatement = options.taskId
+    ? database
+        .prepare(
+          `SELECT * FROM task_events
+           WHERE workspace_id = ? AND task_id = ? AND sequence > ?
+           ORDER BY sequence ASC LIMIT ?`,
+        )
+        .bind(workspaceId, options.taskId, afterSequence, requestedLimit + 1)
+    : database
+        .prepare(
+          `SELECT * FROM task_events
+           WHERE workspace_id = ? AND sequence > ?
+           ORDER BY sequence ASC LIMIT ?`,
+        )
+        .bind(workspaceId, afterSequence, requestedLimit + 1);
+
+  const [workspaceResult, eventResult] = await database.batch([
+    database.prepare("SELECT id FROM workspaces WHERE id = ? LIMIT 1").bind(workspaceId),
+    eventStatement,
+  ]);
+  if (!workspaceResult.results[0]) {
+    throw new ApiError(404, "workspace_not_found", "Workspace not found.");
+  }
+
+  const rows = eventResult.results as unknown as EventRow[];
+  const hasMore = rows.length > requestedLimit;
+  const events = rows.slice(0, requestedLimit).map(mapEvent);
+  const nextAfterSequence = events.at(-1)?.sequence ?? afterSequence;
+
+  return {
+    events,
+    cursor: {
+      afterSequence: nextAfterSequence,
+      hasMore,
+      limit: requestedLimit,
+    },
+  };
+}
+
 export async function loadWorkspaceState(
   database: D1Database,
   workspaceId = DEMO_WORKSPACE_ID,
@@ -474,7 +520,7 @@ export async function loadWorkspaceState(
     tasks,
     activeTask:
       tasks.find((task) =>
-        ["planning", "executing", "validating", "waiting_for_approval"].includes(
+        ["planning", "approved_pending_execution", "executing", "validating", "waiting_for_approval"].includes(
           task.status,
         ),
       ) ?? null,
@@ -820,7 +866,8 @@ export async function executeWorkspaceAction(
     }
 
     const decision = input.action === "approve" ? "approved" : "rejected";
-    const taskStatus = decision === "approved" ? "executing" : "blocked";
+    // Approval records permission; it does not itself execute a local command.
+    const taskStatus = decision === "approved" ? "approved_pending_execution" : "blocked";
     const actor = input.actor ?? "Workspace operator";
     const suffix = (await digest(`${scope}:${key}`)).slice(0, 12);
     const eventId = `evt_approval_${decision}_${suffix}`;
@@ -861,7 +908,7 @@ export async function executeWorkspaceAction(
         ),
       database
         .prepare(
-          `UPDATE tasks SET status = ?, progress = CASE WHEN ? = 'executing' THEN MAX(progress, 72) ELSE progress END,
+          `UPDATE tasks SET status = ?, progress = CASE WHEN ? = 'approved_pending_execution' THEN MAX(progress, 72) ELSE progress END,
              last_transition_key = ?, version = version + 1, updated_at = ?
            WHERE id = ? AND EXISTS (
              SELECT 1 FROM approvals WHERE id = ? AND decision_event_id = ?

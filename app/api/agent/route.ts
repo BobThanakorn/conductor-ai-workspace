@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 import {
   ApiError,
   agentRequestSchema,
@@ -21,19 +19,16 @@ import {
   persistAgentRun,
   storeIdempotentError,
 } from "@/lib/environment-store";
+import {
+  agentProposalSchema,
+  assessAgentProposal,
+  formatUntrustedUserRequest,
+  type AgentProposal,
+} from "@/lib/agent-safety";
 
 export const dynamic = "force-dynamic";
 
-const agentOutputSchema = z.object({
-  summary: z.string().min(1).max(1_200),
-  plan: z.array(z.string().min(1).max(240)).min(1).max(5),
-  proposedAction: z.string().min(1).max(240),
-  riskLevel: z.enum(["R0", "R1", "R2", "R3"]),
-  needsApproval: z.boolean(),
-  evidence: z.array(z.string().min(1).max(240)).max(5),
-});
-
-type AgentOutput = z.infer<typeof agentOutputSchema>;
+type AgentOutput = AgentProposal;
 
 function demoOutput(message: string, taskTitle?: string): AgentOutput {
   return {
@@ -59,7 +54,7 @@ async function runLiveAgent(
   message: string,
   context: Awaited<ReturnType<typeof loadAgentContext>>,
 ): Promise<AgentOutput> {
-  const { Agent, run, setDefaultOpenAIKey } = await import("@openai/agents");
+  const { Agent, Runner, setDefaultOpenAIKey } = await import("@openai/agents");
   setDefaultOpenAIKey(apiKey);
 
   const agent = new Agent({
@@ -72,7 +67,7 @@ async function runLiveAgent(
       "Return a compact structured proposal only. Do not reveal private reasoning.",
       "Mark any local write or external side effect as R1 or higher and require approval.",
     ].join(" "),
-    outputType: agentOutputSchema,
+    outputType: agentProposalSchema,
   });
 
   const prompt = [
@@ -81,11 +76,15 @@ async function runLiveAgent(
     context.task
       ? `Active task: ${context.task.title}. Goal: ${context.task.goal}. Status: ${context.task.status}.`
       : "No active task is selected.",
-    `User follow-up: ${message}`,
+    formatUntrustedUserRequest(message),
     "Respond with a bounded plan for the next safe step.",
   ].join("\n");
-  const result = await run(agent, prompt, { maxTurns: 2 });
-  return agentOutputSchema.parse(result.finalOutput);
+  const runner = new Runner({
+    traceIncludeSensitiveData: false,
+    workflowName: "conductor-planning",
+  });
+  const result = await runner.run(agent, prompt, { maxTurns: 2 });
+  return assessAgentProposal(result.finalOutput).proposal;
 }
 
 function errorBody(error: unknown): { ok: false; error: Record<string, unknown> } {
@@ -146,13 +145,16 @@ export async function POST(request: Request) {
           context,
         );
         mode = "live";
-      } catch (error) {
+      } catch {
         output = demoOutput(input.message, context.task?.title);
-        liveDiagnostic = error instanceof Error ? error.message.slice(0, 180) : "Live agent unavailable.";
+        liveDiagnostic = "Live agent unavailable; a safe demo proposal was returned.";
       }
     } else {
       output = demoOutput(input.message, context.task?.title);
     }
+
+    const assessment = assessAgentProposal(output);
+    output = assessment.proposal;
 
     const persisted = await persistAgentRun(database, {
       workspaceId,
@@ -168,6 +170,10 @@ export async function POST(request: Request) {
 
     return jsonResponse({
       ...persisted,
+      proposalPolicy: {
+        normalized: assessment.normalized,
+        reasons: assessment.reasons,
+      },
       ...(liveDiagnostic ? { liveDiagnostic } : {}),
     });
   } catch (error) {

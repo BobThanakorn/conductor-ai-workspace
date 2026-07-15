@@ -172,7 +172,7 @@ export function validateCommandEnvelopeBasics(
   if (!isPlainRecord(value.workspace)) {
     throw new ContractValidationError("workspace must be a plain object.");
   }
-  assertExactKeys(value.workspace, ["root", "snapshotId"], ["snapshotId"]);
+  assertExactKeys(value.workspace, ["root"], ["snapshotId"]);
   if (
     typeof value.workspace.root !== "string" ||
     value.workspace.root.length === 0 ||
