@@ -29,9 +29,18 @@ npm install
 npm run dev
 ```
 
-The application runs in demo-agent mode by default. To enable the live agent,
-copy `.env.example` to an ignored local environment file and provide an OpenAI
-API key. Never commit credentials.
+The application runs in demo-agent mode by default. To enable the preferred Azure AI Foundry agent, set these server-side values (the key must never be placed in client code):
+
+```bash
+AZURE_AI_FOUNDRY_ENDPOINT=https://ai-environment-resource.services.ai.azure.com
+AZURE_AI_FOUNDRY_API_KEY=replace-with-your-key
+AZURE_AI_FOUNDRY_MODEL=gpt-5.1-codex-mini
+```
+
+Conductor normalizes the endpoint to Azure Foundry's OpenAI-compatible `/openai/v1` route and records each successful run as `azure`. It retains the deterministic demo response if the key is absent or the configured provider is unavailable. `OPENAI_API_KEY` remains an optional legacy fallback and is used only when the Azure key is absent.
+
+Copy `.env.example` to an ignored local environment file and provide the Azure
+API key (or the optional fallback key). Never commit credentials.
 
 ## Verification
 

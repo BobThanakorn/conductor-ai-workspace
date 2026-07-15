@@ -1,14 +1,12 @@
 import { env } from "cloudflare:workers";
 
 import { ApiError, type WorkspaceAction } from "@/lib/api-contract";
+import type { AgentEnvironmentBindings } from "@/lib/agent-provider";
 
 export const DEMO_WORKSPACE_ID = "workspace_atlas";
 
-type EnvironmentBindings = {
+type EnvironmentBindings = AgentEnvironmentBindings & {
   DB?: D1Database;
-  OPENAI_API_KEY?: string;
-  OPENAI_AGENT_MODEL?: string;
-  OPENAI_MODEL?: string;
 };
 
 type WorkspaceRow = {
@@ -290,7 +288,7 @@ async function initialize(database: D1Database): Promise<void> {
         "9f3a1c79d4b27a6e50b8c2027721c9f6a31aa847",
         "Maya Chen + Coding Agent",
         64,
-        "gpt-5.3-codex",
+        "gpt-5.1-codex-mini",
         "seed:task_harden_sessions",
       ),
     database
@@ -1100,7 +1098,7 @@ export async function persistAgentRun(
     scope: string;
     key: string;
     ownerToken: string;
-    mode: "live" | "demo";
+    mode: "azure" | "openai" | "demo";
     model: string;
     promptHash: string;
     output: Record<string, unknown>;
