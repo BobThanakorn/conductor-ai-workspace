@@ -26,6 +26,8 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(workspace, /Approve, create &amp; run/);
   assert.match(workspace, /runPythonSandbox/);
   assert.match(workspace, /workspaceFiles/);
+  assert.match(workspace, /LOCAL_GIT_COMPANION/);
+  assert.match(workspace, /git\/commit/);
   assert.match(pythonRunner, /new Worker\(PYTHON_RUNNER_WORKER_URL/);
   assert.match(pythonWorker, /runPythonAsync/);
   assert.match(pythonWorker, /jsglobals: noJavaScriptGlobals/);

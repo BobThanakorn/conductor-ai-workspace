@@ -12,7 +12,8 @@
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs tests/*.test.ts && tsx --test companion/*.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "companion:git": "tsx companion/local-git-server.ts"
   },
   "dependencies": {
     "@openai/agents": "^0.13.3",

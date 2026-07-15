@@ -20,8 +20,8 @@ production-shaped vertical slice of the approved AI Environment System.
   disabled network bridges, standard-library-only code, strict size/output
   ceilings, and a hard 8-second code-execution timeout.
 - Exact approval and idempotency contracts for persistent actions.
-- A local-companion foundation for workspace path validation and typed,
-  read-only Git operations, with runtime tests for traversal and output limits.
+- A local-companion foundation for workspace path validation, typed Git reads,
+  and approval-triggered local commit creation.
 - Cloudflare/Vinext deployment through OpenAI Sites.
 
 This is intentionally not the final autonomous system. Python files created by
@@ -36,6 +36,18 @@ installation remain gated roadmap phases.
 npm install
 npm run dev
 ```
+
+To let the Git review panel talk to the real local repository, keep this bridge
+running in a second terminal from the same repository:
+
+```bash
+npm run companion:git
+```
+
+When the bridge is running, the UI reads real `git status` and `git diff` data,
+then the reviewed commit button creates a local `git add` plus `git commit` for
+the selected repository files. Push remains deliberately unavailable from the
+browser UI.
 
 The application runs in demo-agent mode by default. To enable the preferred Azure AI Foundry agent, set these server-side values (the key must never be placed in client code):
 
@@ -86,10 +98,11 @@ surface.
   filesystem. Network/host-storage bridges and package installation are
   disabled, and the worker is terminated after success, failure, or timeout.
 - Approval decisions are bound to task state and idempotency keys.
-- Repository approval records do not execute host commands. The Python button
-  runs only the reviewed files inside the separate browser sandbox.
+- Repository approval records do not execute arbitrary host commands. The
+  optional local Git companion exposes bounded status, diff, and commit
+  endpoints only; push is not exposed.
 - Repository and tool content is treated as untrusted evidence.
-- The companion foundation has no generic-shell or write capability.
+- The companion foundation has no generic-shell capability.
 - Hidden chain-of-thought is not requested or persisted.
 
 See [`companion/README.md`](companion/README.md) for the local execution-plane

@@ -79,6 +79,28 @@ type WorkspaceDiff = {
   }>;
 };
 
+type LocalGitFile = {
+  code: string;
+  path: string;
+};
+
+type LocalGitStatus = {
+  ok?: boolean;
+  root?: string;
+  branch?: string;
+  head?: string;
+  files?: LocalGitFile[];
+  raw?: string;
+};
+
+type LocalGitCommit = {
+  ok?: boolean;
+  head?: string;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+};
+
 type WorkspaceContext = {
   strategy: string;
   indexedFiles: number;
@@ -453,6 +475,8 @@ const TERMINAL_LINES = [
   { type: "summary", text: " No local, Git, network, or provider action was executed by this UI." },
 ];
 
+const LOCAL_GIT_COMPANION = "http://127.0.0.1:8765";
+
 function nowTime() {
   return new Intl.DateTimeFormat("en", {
     hour: "2-digit",
@@ -593,6 +617,82 @@ function mergeGeneratedTree(tree: FileTreeNode[], files: GeneratedPythonFile[]):
   ];
 }
 
+function localGitTree(files: LocalGitFile[]): FileTreeNode[] {
+  const root: FileTreeNode[] = [];
+  const directories = new Map<string, FileTreeNode>();
+  const ensureDirectory = (segments: string[]) => {
+    let children = root;
+    let currentPath = "";
+    for (const segment of segments) {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      let directory = directories.get(currentPath);
+      if (!directory) {
+        directory = { id: currentPath, name: segment, type: "directory", children: [] };
+        directories.set(currentPath, directory);
+        children.push(directory);
+      }
+      children = directory.children ?? [];
+    }
+    return children;
+  };
+
+  for (const file of files) {
+    const parts = file.path.split("/");
+    const name = parts.pop() ?? file.path;
+    const children = ensureDirectory(parts);
+    const code = file.code.includes("?")
+      ? "added"
+      : file.code.includes("D")
+        ? "deleted"
+        : "modified";
+    children.push({ id: file.path, name, type: "file", status: code });
+  }
+  return root.length ? root : INITIAL_FILE_TREE;
+}
+
+function diffFromUnifiedText(file: string, text: string): WorkspaceDiff {
+  const lines = text.split(/\r?\n/);
+  const hunks: WorkspaceDiff["hunks"] = [];
+  let current: WorkspaceDiff["hunks"][number] | null = null;
+  let oldNumber = 0;
+  let newNumber = 0;
+  let additions = 0;
+  let deletions = 0;
+  const hunkPattern = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+  for (const line of lines) {
+    const hunkMatch = hunkPattern.exec(line);
+    if (hunkMatch) {
+      current = { header: line, lines: [] };
+      hunks.push(current);
+      oldNumber = Number(hunkMatch[1]);
+      newNumber = Number(hunkMatch[2]);
+      continue;
+    }
+    if (!current || line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+      current.lines.push({ type: "added", oldNumber: null, newNumber: newNumber++, content: line.slice(1) });
+    } else if (line.startsWith("-")) {
+      deletions += 1;
+      current.lines.push({ type: "removed", oldNumber: oldNumber++, newNumber: null, content: line.slice(1) });
+    } else {
+      current.lines.push({ type: "context", oldNumber: oldNumber++, newNumber: newNumber++, content: line.startsWith(" ") ? line.slice(1) : line });
+    }
+  }
+
+  return {
+    file,
+    status: "modified",
+    additions,
+    deletions,
+    checks: ["local git companion"],
+    hunks: hunks.length ? hunks : [{ header: "No diff output.", lines: [] }],
+  };
+}
+
 function normalizeExecutionResult(value: unknown): PythonExecutionResult {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const runnerError = record.error && typeof record.error === "object"
@@ -658,9 +758,66 @@ export default function WorkspaceClient() {
   const [approvedPythonRun, setApprovedPythonRun] = useState<ApprovedPythonRun | null>(null);
   const [executionResult, setExecutionResult] = useState<PythonExecutionResult | null>(null);
   const [executionState, setExecutionState] = useState<"idle" | "running" | "complete" | "failed">("idle");
+  const [localGitConnected, setLocalGitConnected] = useState(false);
   const [acceptedFiles, setAcceptedFiles] = useState(() =>
     new Set(collectChangedFiles(INITIAL_FILE_TREE).map((file) => file.id)),
   );
+
+  const refreshLocalGit = useCallback(async (silent = true) => {
+    try {
+      const response = await fetch(`${LOCAL_GIT_COMPANION}/git/status`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Local Git companion unavailable");
+      const data = (await response.json()) as LocalGitStatus;
+      if (!data.ok) throw new Error("Local Git companion returned an error");
+      const files = data.files ?? [];
+      const nextTree = localGitTree(files);
+      const nextChanged = collectChangedFiles(nextTree);
+      setLocalGitConnected(true);
+      setApiState("connected");
+      setWorkspace((current) => ({
+        ...current,
+        repositoryPath: data.root || current.repositoryPath,
+        branch: data.branch || current.branch,
+        headSha: data.head || current.headSha,
+        network: "Local companion",
+        runner: "Local Git companion",
+        taskStatus: files.length ? "ready_to_review" : "clean",
+        taskProgress: files.length ? 82 : 100,
+      }));
+      setFileTree(nextTree);
+      setFolders((current) => new Set([...collectDirectories(nextTree), ...current]));
+      setAcceptedFiles(new Set(nextChanged.map((file) => file.id)));
+      if (nextChanged[0]) {
+        setActiveFile((current) => current.endsWith(".py") ? current : nextChanged[0].id);
+        const diffResponse = await fetch(`${LOCAL_GIT_COMPANION}/git/diff`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paths: [nextChanged[0].id] }),
+        });
+        if (diffResponse.ok) {
+          const diffData = (await diffResponse.json()) as { stdout?: string };
+          setServerDiff(diffFromUnifiedText(nextChanged[0].id, diffData.stdout ?? ""));
+        }
+      } else {
+        setServerDiff(null);
+      }
+      setTerminalLines([
+        { type: "muted", text: "$ git status --short" },
+        ...(data.raw?.trim()
+          ? data.raw.trimEnd().split(/\r?\n/).map((text) => ({ type: "output", text }))
+          : [{ type: "success", text: " Working tree clean" }]),
+        { type: "summary", text: " Local Git companion connected. Commit is available for selected reviewed files." },
+      ]);
+    } catch {
+      setLocalGitConnected(false);
+      if (!silent) {
+        setTerminalLines((current) => [
+          ...current.slice(-12),
+          { type: "error", text: " Local Git companion is not running. Start it with: npm run companion:git" },
+        ]);
+      }
+    }
+  }, []);
 
   const loadWorkspace = useCallback(async (silent = false, signal?: AbortSignal) => {
     if (!silent) setApiState("connecting");
@@ -762,10 +919,12 @@ export default function WorkspaceClient() {
     const controller = new AbortController();
     const initialLoad = window.setTimeout(() => {
       void loadWorkspace(false, controller.signal);
+      void refreshLocalGit(true);
     }, 0);
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         void loadWorkspace(true, controller.signal);
+        void refreshLocalGit(true);
       }
     }, 15_000);
     return () => {
@@ -773,7 +932,7 @@ export default function WorkspaceClient() {
       window.clearTimeout(initialLoad);
       window.clearInterval(interval);
     };
-  }, [loadWorkspace]);
+  }, [loadWorkspace, refreshLocalGit]);
 
   useEffect(() => {
     const hydrateStorage = window.setTimeout(() => {
@@ -905,10 +1064,25 @@ export default function WorkspaceClient() {
     });
   }
 
-  function selectFile(path: string) {
+  async function selectFile(path: string) {
     setActiveFile(path);
     setSelectedGeneratedFile(localPythonFiles.some((file) => file.path === path) ? path : null);
     setExplorerOpen(false);
+    if (localGitConnected && !path.endsWith(".py")) {
+      try {
+        const response = await fetch(`${LOCAL_GIT_COMPANION}/git/diff`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paths: [path] }),
+        });
+        if (response.ok) {
+          const data = (await response.json()) as { stdout?: string };
+          setServerDiff(diffFromUnifiedText(path, data.stdout ?? ""));
+        }
+      } catch {
+        setLocalGitConnected(false);
+      }
+    }
   }
 
   function toggleAcceptedFile(path: string) {
@@ -986,7 +1160,61 @@ export default function WorkspaceClient() {
   }
 
   async function createCommit() {
-    showNotice(`${acceptedFiles.size} reviewed files selected · commit remains human-gated`);
+    if (!acceptedFiles.size) return;
+    setBusyAction("create_commit");
+    setBottomPanel("terminal");
+    const paths = Array.from(acceptedFiles).filter((path) => !path.endsWith(".py"));
+    if (!paths.length) {
+      showNotice("Browser Python files are not in the host Git repo yet");
+      setBusyAction(null);
+      return;
+    }
+    try {
+      const response = await fetch(`${LOCAL_GIT_COMPANION}/git/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          paths,
+          message: `chore: apply reviewed workspace changes`,
+        }),
+      });
+      const data = (await response.json()) as LocalGitCommit;
+      if (!response.ok || !data.ok) throw new Error(data.error || "Commit failed");
+      setTerminalLines([
+        { type: "muted", text: `$ git add -- ${paths.join(" ")}` },
+        { type: "muted", text: '$ git commit -m "chore: apply reviewed workspace changes"' },
+        ...(data.stdout?.trim()
+          ? data.stdout.trimEnd().split(/\r?\n/).map((text) => ({ type: "output", text }))
+          : []),
+        ...(data.stderr?.trim()
+          ? data.stderr.trimEnd().split(/\r?\n/).map((text) => ({ type: "error", text }))
+          : []),
+        { type: "success", text: ` Commit created: ${data.head ?? "new HEAD"}` },
+      ]);
+      setTimeline((current) => [
+        ...current.slice(-7),
+        {
+          id: `git-commit-${Date.now()}`,
+          title: "Reviewed commit created",
+          detail: `${paths.length} file${paths.length === 1 ? "" : "s"} committed at ${data.head ?? "HEAD"}`,
+          time: nowTime(),
+          state: "complete",
+        },
+      ]);
+      showNotice(`Commit created: ${data.head ?? "HEAD"}`);
+      await refreshLocalGit(true);
+    } catch (error) {
+      setTerminalLines((current) => [
+        ...current.slice(-12),
+        { type: "error", text: ` Commit failed: ${error instanceof Error ? error.message : "local companion unavailable"}` },
+        { type: "pending", text: " Start the bridge in this repo with: npm run companion:git" },
+      ]);
+      showNotice("Commit failed · local Git companion is not connected");
+      setLocalGitConnected(false);
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function executePython(run: ApprovedPythonRun) {
