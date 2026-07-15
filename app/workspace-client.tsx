@@ -6,9 +6,11 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
+import { runPythonSandbox } from "@/lib/python-runner";
 import "./workspace.css";
 
 type ViewMode = "diff" | "code";
@@ -99,6 +101,49 @@ type WorkspaceApproval = {
   expiresAt?: string;
 };
 
+type GeneratedPythonFile = {
+  path: string;
+  content: string;
+  language: "python";
+};
+
+type PythonExecutionRequest = {
+  entrypoint: string;
+  args?: string[];
+  timeoutMs?: number;
+};
+
+type CodingAgentProposal = {
+  summary: string;
+  plan?: string[];
+  proposedAction?: string;
+  riskLevel?: "R0" | "R1" | "R2" | "R3";
+  needsApproval?: boolean;
+  evidence?: string[];
+  artifacts?: GeneratedPythonFile[];
+  execution?: PythonExecutionRequest;
+};
+
+type PythonExecutionResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  durationMs?: number;
+};
+
+type ApprovedPythonRun = {
+  files: GeneratedPythonFile[];
+  execution: PythonExecutionRequest;
+};
+
+type AgentApiResponse = {
+  output?: CodingAgentProposal;
+  model?: string;
+  mode?: string;
+  liveDiagnostic?: string;
+};
+
 type WorkspaceApiResponse = {
   workspace?: {
     id?: string;
@@ -170,7 +215,7 @@ const INITIAL_WORKSPACE: WorkspaceMeta = {
   taskTitle: "Harden session validation",
   taskStatus: "waiting_for_approval",
   taskProgress: 64,
-  model: "gpt-5.3-codex",
+  model: "gpt-5.1-codex-mini",
 };
 
 const INITIAL_FILE_TREE: FileTreeNode[] = [
@@ -469,7 +514,124 @@ function sourceLabel(path: string, index: number) {
   };
 }
 
+function normalizePythonFiles(value: unknown): GeneratedPythonFile[] {
+  if (!Array.isArray(value) || value.length > 8) return [];
+  const files = new Map<string, GeneratedPythonFile>();
+  let totalBytes = 0;
+  const validSegment = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object") return [];
+    const record = candidate as Record<string, unknown>;
+    if (record.language !== "python" || typeof record.path !== "string" || typeof record.content !== "string") return [];
+    const path = record.path.trim();
+    const segments = path.split("/");
+    if (
+      !path.endsWith(".py") ||
+      path.length > 200 ||
+      path.includes("\0") ||
+      path.startsWith("/") ||
+      /^[A-Za-z]:/.test(path) ||
+      segments.some((segment) => !validSegment.test(segment) || segment === "." || segment === "..") ||
+      files.has(path)
+    ) return [];
+    const contentBytes = new TextEncoder().encode(record.content).byteLength;
+    if (contentBytes > 32_000) return [];
+    totalBytes += contentBytes;
+    if (totalBytes > 120_000) return [];
+    files.set(path, { path, content: record.content, language: "python" });
+  }
+  return Array.from(files.values());
+}
+
+function normalizePythonArgs(value: unknown): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 16) return null;
+  let totalBytes = 0;
+  let totalCharacters = 0;
+  const args: string[] = [];
+  for (const argument of value) {
+    if (
+      typeof argument !== "string" ||
+      /[\u0000-\u001f\u007f]/.test(argument) ||
+      argument.length > 256
+    ) return null;
+    totalCharacters += argument.length;
+    if (totalCharacters > 2_048) return null;
+    const bytes = new TextEncoder().encode(argument).byteLength;
+    if (bytes > 4 * 1024) return null;
+    totalBytes += bytes;
+    if (totalBytes > 16 * 1024) return null;
+    args.push(argument);
+  }
+  return args;
+}
+
+function mergeGeneratedTree(tree: FileTreeNode[], files: GeneratedPythonFile[]): FileTreeNode[] {
+  if (!files.length) return tree;
+  const localPaths = new Set(files.map((file) => file.path));
+  const knownFiles = new Set<string>();
+  const mergeNodes = (nodes: FileTreeNode[]): FileTreeNode[] => nodes.map((node) => {
+    if (node.type === "file") {
+      knownFiles.add(node.id);
+      return localPaths.has(node.id) ? { ...node, status: "local" } : node;
+    }
+    return { ...node, children: mergeNodes(node.children ?? []) };
+  });
+  const mergedTree = mergeNodes(tree);
+  const generated = files
+    .filter((file) => !knownFiles.has(file.path))
+    .map<FileTreeNode>((file) => ({
+      id: file.path,
+      name: file.path.split("/").at(-1) ?? file.path,
+      type: "file",
+      status: "local",
+    }));
+  if (!generated.length) return mergedTree;
+  return [
+    ...mergedTree,
+    { id: "__generated_python__", name: "Browser Python", type: "directory", children: generated },
+  ];
+}
+
+function normalizeExecutionResult(value: unknown): PythonExecutionResult {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const runnerError = record.error && typeof record.error === "object"
+    ? record.error as Record<string, unknown>
+    : null;
+  const errorMessage = typeof runnerError?.message === "string" ? runnerError.message : "";
+  const stderr = typeof record.stderr === "string" ? record.stderr : "";
+  return {
+    stdout: typeof record.stdout === "string" ? record.stdout : "",
+    stderr: [stderr, errorMessage].filter(Boolean).join(stderr && errorMessage ? "\n" : ""),
+    exitCode: typeof record.exitCode === "number" ? record.exitCode : null,
+    timedOut: record.timedOut === true,
+    durationMs: typeof record.durationMs === "number" ? record.durationMs : undefined,
+  };
+}
+
+function executionTerminalLines(run: ApprovedPythonRun, result?: PythonExecutionResult) {
+  const command = `$ python ${run.execution.entrypoint}${run.execution.args?.length ? ` ${run.execution.args.join(" ")}` : ""}`;
+  if (!result) {
+    return [
+      { type: "muted", text: command },
+      { type: "running", text: " ◌ Python sandbox is running…" },
+    ];
+  }
+  const stdout = result.stdout.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "output", text }));
+  const stderr = result.stderr.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "error", text }));
+  const exitText = result.timedOut
+    ? ` Process timed out${result.durationMs ? ` after ${result.durationMs}ms` : ""}`
+    : ` Process exited with status ${result.exitCode ?? "unknown"}${result.durationMs ? ` · ${result.durationMs}ms` : ""}`;
+  return [
+    { type: "muted", text: command },
+    ...stdout,
+    ...stderr,
+    { type: result.exitCode === 0 && !result.timedOut ? "complete" : "error", text: exitText },
+  ];
+}
+
 export default function WorkspaceClient() {
+  const agentModelOverride = useRef<string | null>(null);
   const [workspace, setWorkspace] = useState(INITIAL_WORKSPACE);
   const [apiState, setApiState] = useState<ApiState>("connecting");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
@@ -488,6 +650,14 @@ export default function WorkspaceClient() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [terminalLines, setTerminalLines] = useState(TERMINAL_LINES);
+  const [pendingProposal, setPendingProposal] = useState<CodingAgentProposal | null>(null);
+  const [proposalOrigin, setProposalOrigin] = useState<{ mode: string; diagnostic?: string }>({ mode: "unknown" });
+  const [localPythonFiles, setLocalPythonFiles] = useState<GeneratedPythonFile[]>([]);
+  const [storageReady, setStorageReady] = useState(false);
+  const [selectedGeneratedFile, setSelectedGeneratedFile] = useState<string | null>(null);
+  const [approvedPythonRun, setApprovedPythonRun] = useState<ApprovedPythonRun | null>(null);
+  const [executionResult, setExecutionResult] = useState<PythonExecutionResult | null>(null);
+  const [executionState, setExecutionState] = useState<"idle" | "running" | "complete" | "failed">("idle");
   const [acceptedFiles, setAcceptedFiles] = useState(() =>
     new Set(collectChangedFiles(INITIAL_FILE_TREE).map((file) => file.id)),
   );
@@ -522,21 +692,28 @@ export default function WorkspaceClient() {
         taskTitle: primaryTask?.title || remote?.taskTitle || current.taskTitle,
         taskStatus: primaryTask?.status || current.taskStatus,
         taskProgress: typeof primaryTask?.progress === "number" ? primaryTask.progress : current.taskProgress,
-        model: primaryTask?.model || current.model,
+        model: agentModelOverride.current || primaryTask?.model || current.model,
       }));
 
-      if (data.fileTree) {
-        setFileTree(data.fileTree);
-        setFolders(collectDirectories(data.fileTree));
-        const changed = collectChangedFiles(data.fileTree);
-        setAcceptedFiles(new Set(changed.map((file) => file.id)));
+      const remoteFileTree = data.fileTree;
+      if (remoteFileTree) {
+        setFileTree(remoteFileTree);
+        setFolders((current) => new Set([
+          ...collectDirectories(remoteFileTree),
+          ...(current.has("__generated_python__") ? ["__generated_python__"] : []),
+        ]));
+        const changed = collectChangedFiles(remoteFileTree);
+        setAcceptedFiles((current) => new Set([
+          ...changed.map((file) => file.id),
+          ...Array.from(current).filter((path) => path.endsWith(".py")),
+        ]));
         const fileIds = new Set<string>();
         const visit = (nodes: FileTreeNode[]) => nodes.forEach((node) => {
           if (node.type === "file") fileIds.add(node.id);
           else visit(node.children ?? []);
         });
-        visit(data.fileTree);
-        setActiveFile((current) => fileIds.has(current) ? current : data.diff?.file || changed[0]?.id || current);
+        visit(remoteFileTree);
+        setActiveFile((current) => current.endsWith(".py") || fileIds.has(current) ? current : data.diff?.file || changed[0]?.id || current);
       }
       if (data.diff) setServerDiff(data.diff);
       if (data.context) setContext(data.context);
@@ -599,6 +776,30 @@ export default function WorkspaceClient() {
   }, [loadWorkspace]);
 
   useEffect(() => {
+    const hydrateStorage = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem("conductor.generatedPythonFiles");
+        const files = normalizePythonFiles(stored ? JSON.parse(stored) : []);
+        setLocalPythonFiles(files);
+        if (files.length) {
+          setFolders((current) => new Set(current).add("__generated_python__"));
+          setAcceptedFiles((current) => new Set([...current, ...files.map((file) => file.path)]));
+        }
+      } catch {
+        window.localStorage.removeItem("conductor.generatedPythonFiles");
+      } finally {
+        setStorageReady(true);
+      }
+    }, 0);
+    return () => window.clearTimeout(hydrateStorage);
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    window.localStorage.setItem("conductor.generatedPythonFiles", JSON.stringify(localPythonFiles));
+  }, [localPythonFiles, storageReady]);
+
+  useEffect(() => {
     function closePanels(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         setExplorerOpen(false);
@@ -609,11 +810,43 @@ export default function WorkspaceClient() {
     return () => window.removeEventListener("keydown", closePanels);
   }, []);
 
-  const currentDiff = useMemo(() => {
+  const draftPythonFiles = useMemo(
+    () => normalizePythonFiles(pendingProposal?.artifacts),
+    [pendingProposal],
+  );
+  const selectedDraftFile = useMemo(
+    () => draftPythonFiles.find((file) => file.path === activeFile) ?? null,
+    [activeFile, draftPythonFiles],
+  );
+  const selectedPythonFile = useMemo(
+    () => localPythonFiles.find((file) => file.path === activeFile) ?? null,
+    [activeFile, localPythonFiles],
+  );
+  const displayFileTree = useMemo(
+    () => mergeGeneratedTree(fileTree, localPythonFiles),
+    [fileTree, localPythonFiles],
+  );
+  const currentDiff = useMemo<DiffLine[]>(() => {
+    if (selectedDraftFile) {
+      const lines = selectedDraftFile.content.split(/\r?\n/);
+      return [
+        { kind: "fold" as const, content: `@@ draft · not applied · +1,${lines.length} @@` },
+        ...lines.map((content, index) => ({ kind: "addition" as const, newLine: index + 1, content })),
+      ];
+    }
+    if (selectedPythonFile) {
+      const lines = selectedPythonFile.content.split(/\r?\n/);
+      return [
+        { kind: "fold" as const, content: `@@ -0,0 +1,${lines.length} @@ generated file` },
+        ...lines.map((content, index) => ({ kind: "addition" as const, newLine: index + 1, content })),
+      ];
+    }
     if (serverDiff?.file === activeFile) return apiDiffLines(serverDiff);
     return DIFF_CONTENT[activeFile] ?? [{ kind: "fold", content: "No diff is available for this file." }];
-  }, [activeFile, serverDiff]);
+  }, [activeFile, selectedDraftFile, selectedPythonFile, serverDiff]);
   const currentCode = useMemo(() => {
+    if (selectedDraftFile) return selectedDraftFile.content.split(/\r?\n/);
+    if (selectedPythonFile) return selectedPythonFile.content.split(/\r?\n/);
     if (serverDiff?.file === activeFile) {
       return serverDiff.hunks.flatMap((hunk) =>
         hunk.lines.filter((line) => line.type !== "removed").map((line) => line.content),
@@ -624,13 +857,39 @@ export default function WorkspaceClient() {
       "",
       "// Source contents are not included in the current workspace snapshot.",
     ];
-  }, [activeFile, serverDiff]);
-  const changedFiles = useMemo(() => collectChangedFiles(fileTree), [fileTree]);
+  }, [activeFile, selectedDraftFile, selectedPythonFile, serverDiff]);
+  const changedFiles = useMemo(() => collectChangedFiles(displayFileTree), [displayFileTree]);
+  const editorFiles = useMemo(() => {
+    const activeVirtual: FileTreeNode | null = selectedDraftFile
+      ? { id: selectedDraftFile.path, name: selectedDraftFile.path.split("/").at(-1) ?? selectedDraftFile.path, type: "file", status: "draft" }
+      : selectedPythonFile
+        ? { id: selectedPythonFile.path, name: selectedPythonFile.path.split("/").at(-1) ?? selectedPythonFile.path, type: "file", status: "local" }
+        : null;
+    const unique = new Map<string, FileTreeNode>();
+    if (activeVirtual) unique.set(activeVirtual.id, activeVirtual);
+    changedFiles.forEach((file) => unique.set(file.id, file));
+    if (!unique.size) unique.set(activeFile, { id: activeFile, name: activeFile.split("/").at(-1) ?? activeFile, type: "file" });
+    return Array.from(unique.values()).slice(0, 3);
+  }, [activeFile, changedFiles, selectedDraftFile, selectedPythonFile]);
   const contextSources = useMemo(() => context.sources.map(sourceLabel), [context.sources]);
   const contextPercent = Math.min(100, Math.round((context.tokenBudget.used / Math.max(1, context.tokenBudget.limit)) * 100));
-  const activeDiffStats = serverDiff?.file === activeFile
-    ? { additions: serverDiff.additions, deletions: serverDiff.deletions }
-    : { additions: 24, deletions: 6 };
+  const activeDiffStats = selectedDraftFile
+    ? { additions: selectedDraftFile.content.split(/\r?\n/).length, deletions: 0 }
+    : selectedPythonFile
+    ? { additions: selectedPythonFile.content.split(/\r?\n/).length, deletions: 0 }
+    : serverDiff?.file === activeFile
+      ? { additions: serverDiff.additions, deletions: serverDiff.deletions }
+      : { additions: 24, deletions: 6 };
+  const requestedDraftEntrypoint = pendingProposal?.execution?.entrypoint
+    ?.trim();
+  const proposalEntrypoint = requestedDraftEntrypoint
+    ? draftPythonFiles.some((file) => file.path === requestedDraftEntrypoint) ? requestedDraftEntrypoint : null
+    : draftPythonFiles[0]?.path ?? null;
+  const proposalArgs = normalizePythonArgs(pendingProposal?.execution?.args);
+  const requestedTimeoutMs = pendingProposal?.execution?.timeoutMs;
+  const proposalTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs)
+    ? Math.min(8_000, Math.max(100, Math.round(requestedTimeoutMs)))
+    : 5_000;
 
   function showNotice(message: string) {
     setNotice(message);
@@ -648,6 +907,7 @@ export default function WorkspaceClient() {
 
   function selectFile(path: string) {
     setActiveFile(path);
+    setSelectedGeneratedFile(localPythonFiles.some((file) => file.path === path) ? path : null);
     setExplorerOpen(false);
   }
 
@@ -729,6 +989,138 @@ export default function WorkspaceClient() {
     showNotice(`${acceptedFiles.size} reviewed files selected · commit remains human-gated`);
   }
 
+  async function executePython(run: ApprovedPythonRun) {
+    const runEventId = `python-run-${Date.now()}`;
+    setBottomPanel("terminal");
+    setExecutionState("running");
+    setExecutionResult(null);
+    setTerminalLines(executionTerminalLines(run));
+    setTimeline((current) => [
+      ...current.slice(-7),
+      {
+        id: runEventId,
+        title: "Python sandbox running",
+        detail: `Executing ${run.execution.entrypoint} with network and host filesystem access disabled`,
+        time: nowTime(),
+        state: "active",
+      },
+    ]);
+    try {
+      const rawResult = await runPythonSandbox({
+        files: run.files.map(({ path, content }) => ({ path, content })),
+        entrypoint: run.execution.entrypoint,
+        args: run.execution.args ?? [],
+        timeoutMs: run.execution.timeoutMs ?? 5_000,
+      });
+      const result = normalizeExecutionResult(rawResult);
+      setExecutionResult(result);
+      setExecutionState(result.exitCode === 0 && !result.timedOut ? "complete" : "failed");
+      setTerminalLines(executionTerminalLines(run, result));
+      setTimeline((current) => current.map((item) => item.id === runEventId
+        ? {
+            ...item,
+            title: result.exitCode === 0 && !result.timedOut ? "Python run completed" : "Python run failed",
+            detail: result.timedOut
+              ? `Execution stopped after ${result.durationMs ?? run.execution.timeoutMs ?? 5_000} ms`
+              : `Exit ${result.exitCode ?? "unknown"} · ${result.durationMs ?? 0} ms`,
+            time: nowTime(),
+            state: "complete",
+          }
+        : item));
+      showNotice(result.exitCode === 0 && !result.timedOut ? "Python run completed" : "Python run finished with an error");
+    } catch (error) {
+      const result: PythonExecutionResult = {
+        stdout: "",
+        stderr: error instanceof Error ? error.message : "The Python sandbox could not start.",
+        exitCode: null,
+        timedOut: false,
+      };
+      setExecutionResult(result);
+      setExecutionState("failed");
+      setTerminalLines(executionTerminalLines(run, result));
+      setTimeline((current) => current.map((item) => item.id === runEventId
+        ? {
+            ...item,
+            title: "Python sandbox failed",
+            detail: result.stderr,
+            time: nowTime(),
+            state: "complete",
+          }
+        : item));
+      showNotice("Python sandbox failed to start");
+    }
+  }
+
+  async function approvePythonProposal() {
+    if (!pendingProposal) return;
+    const files = normalizePythonFiles(pendingProposal.artifacts);
+    if (!files.length) {
+      showNotice("This proposal has no safe Python files to create");
+      return;
+    }
+    if (!proposalEntrypoint) {
+      showNotice("The proposed entrypoint is not one of the reviewed Python files");
+      return;
+    }
+    const entrypoint = proposalEntrypoint;
+    const execution: PythonExecutionRequest = {
+      entrypoint,
+      args: proposalArgs ?? [],
+      timeoutMs: proposalTimeoutMs,
+    };
+    const mergedFiles = new Map(localPythonFiles.map((file) => [file.path, file]));
+    files.forEach((file) => mergedFiles.set(file.path, file));
+    const browserWorkspaceFiles = normalizePythonFiles(Array.from(mergedFiles.values()));
+    if (browserWorkspaceFiles.length !== mergedFiles.size) {
+      showNotice("The combined browser workspace exceeds 8 files or 120 KB · remove a saved file before approving");
+      return;
+    }
+    const run = { files: browserWorkspaceFiles, execution };
+
+    setLocalPythonFiles(browserWorkspaceFiles);
+    setFolders((current) => new Set(current).add("__generated_python__"));
+    setAcceptedFiles((current) => new Set([...current, ...files.map((file) => file.path)]));
+    setSelectedGeneratedFile(entrypoint);
+    setActiveFile(entrypoint);
+    setViewMode("code");
+    setApprovedPythonRun(run);
+    setPendingProposal(null);
+    setInspectorOpen(false);
+    setTimeline((current) => [
+      ...current.slice(-7),
+      {
+        id: `python-approved-${Date.now()}`,
+        title: "Python proposal approved",
+        detail: `${files.length} file${files.length === 1 ? "" : "s"} saved in this browser workspace`,
+        time: nowTime(),
+        state: "complete",
+      },
+    ]);
+    await executePython(run);
+  }
+
+  function rejectPythonProposal() {
+    if (!pendingProposal) return;
+    const rejectedPaths = new Set(normalizePythonFiles(pendingProposal.artifacts).map((file) => file.path));
+    setPendingProposal(null);
+    if (rejectedPaths.has(activeFile) && !localPythonFiles.some((file) => file.path === activeFile)) {
+      const fallbackFile = serverDiff?.file || changedFiles[0]?.id || INITIAL_FILE_TREE[0].id;
+      setActiveFile(fallbackFile);
+      setSelectedGeneratedFile(null);
+    }
+    setTimeline((current) => [
+      ...current.slice(-7),
+      {
+        id: `python-rejected-${Date.now()}`,
+        title: "Coding proposal rejected",
+        detail: "No files were created and no code was executed",
+        time: nowTime(),
+        state: "complete",
+      },
+    ]);
+    showNotice("Proposal rejected · workspace unchanged");
+  }
+
   async function submitTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = prompt.trim();
@@ -758,16 +1150,53 @@ export default function WorkspaceClient() {
           message,
           taskId: workspace.taskId,
           workspaceId: workspace.id,
+          workspaceFiles: localPythonFiles.map(({ path, content }) => ({ path, content })),
           idempotencyKey: `agent-${Date.now()}`,
         }),
       });
       if (!response.ok) throw new Error("Agent unavailable");
+      const data = (await response.json()) as AgentApiResponse;
+      if (data.model) {
+        agentModelOverride.current = data.model;
+        setWorkspace((current) => ({ ...current, model: data.model as string }));
+      }
+      if (data.output) {
+        setProposalOrigin({ mode: data.mode ?? "unknown", diagnostic: data.liveDiagnostic });
+        const draftFiles = normalizePythonFiles(data.output.artifacts);
+        if (draftFiles.length) {
+          setPendingProposal(data.output);
+          setSelectedGeneratedFile(draftFiles[0].path);
+          setActiveFile(draftFiles[0].path);
+          setViewMode("code");
+          setInspectorOpen(true);
+        } else {
+          const rejectedArtifacts = Array.isArray(data.output.artifacts) && data.output.artifacts.length > 0;
+          setPendingProposal(null);
+          if (draftPythonFiles.some((file) => file.path === activeFile) && !localPythonFiles.some((file) => file.path === activeFile)) {
+            setActiveFile(serverDiff?.file || changedFiles[0]?.id || INITIAL_FILE_TREE[0].id);
+            setSelectedGeneratedFile(null);
+          }
+          setBottomPanel("terminal");
+          setTerminalLines((current) => [
+            ...current.slice(-16),
+            { type: "muted", text: "" },
+            { type: "info", text: ` Agent · ${data.output?.summary.replace(/\s+/g, " ")}` },
+            ...(data.output?.plan ?? []).map((step, index) => ({ type: "output", text: ` ${index + 1}. ${step}` })),
+            ...(data.mode === "demo" || data.liveDiagnostic
+              ? [{ type: "pending", text: ` ${data.mode === "demo" ? "Fallback response" : "Live model fallback"} · ${data.liveDiagnostic || "demo mode"}` }]
+              : []),
+            ...(rejectedArtifacts
+              ? [{ type: "error", text: " Proposed artifacts were rejected: paths or size limits did not match the browser sandbox policy." }]
+              : []),
+          ]);
+        }
+      }
       setApiState("connected");
       await loadWorkspace(true);
-      showNotice("Conductor is working on your follow-up");
+      showNotice(normalizePythonFiles(data.output?.artifacts).length ? "Proposal ready for review" : "Agent response ready");
     } catch {
       setApiState("preview");
-      showNotice("Follow-up added to the local task timeline");
+      showNotice("Agent request failed · no files were created");
     } finally {
       setBusyAction(null);
     }
@@ -881,7 +1310,7 @@ export default function WorkspaceClient() {
           </button>
 
           <nav className="file-tree" aria-label="Repository files" data-testid="file-tree">
-            {fileTree.map((node) => (
+            {displayFileTree.map((node) => (
               <TreeNodeView
                 key={node.id}
                 node={node}
@@ -919,9 +1348,7 @@ export default function WorkspaceClient() {
           <section className="editor-panel" aria-label="Editor and diff viewer">
             <div className="editor-tabs-row">
               <div className="editor-tabs" role="tablist" aria-label="Open files">
-                {(changedFiles.length ? changedFiles : [{ id: activeFile, name: fileLabel, type: "file" as const }])
-                  .slice(0, 3)
-                  .map((file) => (
+                {editorFiles.map((file) => (
                     <EditorTab
                       key={file.id}
                       label={file.name}
@@ -966,10 +1393,11 @@ export default function WorkspaceClient() {
                 ))}
               </div>
               <div className="diff-summary" aria-label="Diff summary">
+                {selectedDraftFile && <span className="draft-badge">Draft · not applied</span>}
                 <span className="addition-text">+{activeDiffStats.additions}</span>
                 <span className="deletion-text">−{activeDiffStats.deletions}</span>
                 <span className="reviewed-dot" aria-hidden="true" />
-                reviewed
+                {selectedDraftFile ? "review required" : "reviewed"}
                 <button type="button" aria-label="More editor actions">•••</button>
               </div>
             </div>
@@ -1004,9 +1432,13 @@ export default function WorkspaceClient() {
               <span><b>Ln 16, Col 5</b></span>
               <span>Spaces: 2</span>
               <span>UTF-8</span>
-              <span>TypeScript</span>
+              <span>{activeFile.endsWith(".py") ? "Python" : "TypeScript"}</span>
               <span className="status-spacer" />
-              <span className="safe-status"><i aria-hidden="true">✓</i> policy checked</span>
+              {selectedDraftFile ? (
+                <span className="draft-status"><i aria-hidden="true">◌</i> draft only · no file created</span>
+              ) : (
+                <span className="safe-status"><i aria-hidden="true">✓</i> policy checked</span>
+              )}
             </div>
           </section>
 
@@ -1041,7 +1473,24 @@ export default function WorkspaceClient() {
               <div className="terminal" data-testid="test-terminal" aria-label="Test terminal" aria-live="polite">
                 <div className="terminal-command-row">
                   <span className="terminal-session">TASK TERMINAL</span>
-                  <span className="terminal-sandbox"><i aria-hidden="true" /> sandbox · pid 418</span>
+                  <div className="terminal-controls">
+                    {executionResult && (
+                      <span className={`execution-status ${executionState}`}>
+                        exit {executionResult.exitCode ?? "—"}
+                      </span>
+                    )}
+                    {approvedPythonRun && (
+                      <button
+                        type="button"
+                        onClick={() => void executePython(approvedPythonRun)}
+                        disabled={executionState === "running"}
+                        data-testid="run-python-again"
+                      >
+                        {executionState === "running" ? "Running…" : "Run again"}
+                      </button>
+                    )}
+                    <span className="terminal-sandbox"><i aria-hidden="true" /> Python sandbox</span>
+                  </div>
                 </div>
                 <div className="terminal-lines">
                   {terminalLines.map((line, index) => (
@@ -1145,6 +1594,93 @@ export default function WorkspaceClient() {
               return <span className={className} key={index} />;
             })}
           </div>
+
+          {pendingProposal && (
+            <section
+              className="python-proposal-card"
+              aria-labelledby="python-proposal-title"
+              data-testid="python-proposal-review"
+            >
+              <div className="proposal-heading">
+                <span className="python-mark" aria-hidden="true">PY</span>
+                <div>
+                  <span className="eyebrow">Coding agent proposal</span>
+                  <h2 id="python-proposal-title">Review before creating files</h2>
+                </div>
+                <span className="risk-pill">{pendingProposal.riskLevel ?? "R1"} · local</span>
+              </div>
+
+              {(proposalOrigin.mode === "demo" || proposalOrigin.diagnostic) && (
+                <div className="proposal-origin-warning" role="note">
+                  <strong>{proposalOrigin.mode === "demo" ? "Fallback proposal" : "Live model fallback"}</strong>
+                  <span>{proposalOrigin.diagnostic || "This response came from demo mode, not the configured live coding model."}</span>
+                </div>
+              )}
+
+              <p className="proposal-summary">{pendingProposal.summary}</p>
+              <div className="draft-notice">
+                <span aria-hidden="true">◌</span>
+                <div><strong>Draft · not applied</strong><span>Inspect the complete code in the editor before approving.</span></div>
+              </div>
+
+              <div className="proposal-file-heading">
+                <span>Proposed files</span>
+                <b>{draftPythonFiles.length}</b>
+              </div>
+              {draftPythonFiles.length ? (
+                <ul className="proposal-files">
+                  {draftPythonFiles.map((file) => (
+                    <li key={file.path}>
+                      <button
+                        type="button"
+                        className={selectedGeneratedFile === file.path ? "selected" : ""}
+                        onClick={() => {
+                          setSelectedGeneratedFile(file.path);
+                          setActiveFile(file.path);
+                          setViewMode("code");
+                          setInspectorOpen(false);
+                        }}
+                        aria-pressed={selectedGeneratedFile === file.path}
+                      >
+                        <span className="proposal-file-icon">PY</span>
+                        <span>{file.path}</span>
+                        <b>{file.content.split(/\r?\n/).length} lines</b>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="proposal-empty">No valid, relative <code>.py</code> artifacts were included.</div>
+              )}
+
+              <dl className="proposal-execution">
+                <div><dt>Entrypoint</dt><dd className={proposalEntrypoint ? "" : "invalid"}>{proposalEntrypoint || "Invalid or missing"}</dd></div>
+                <div><dt>Timeout</dt><dd>{proposalTimeoutMs} ms</dd></div>
+                <div><dt>Arguments</dt><dd className={proposalArgs === null ? "invalid" : ""}>{proposalArgs === null ? "Invalid limits" : `${proposalArgs.length} supplied`}</dd></div>
+              </dl>
+
+              <div className="proposal-actions">
+                <button
+                  className="proposal-reject"
+                  type="button"
+                  onClick={rejectPythonProposal}
+                  disabled={executionState === "running"}
+                  data-testid="reject-python-proposal"
+                >
+                  Reject
+                </button>
+                <button
+                  className="proposal-approve"
+                  type="button"
+                  onClick={() => void approvePythonProposal()}
+                  disabled={!draftPythonFiles.length || !proposalEntrypoint || proposalArgs === null || executionState === "running"}
+                  data-testid="approve-create-run"
+                >
+                  Approve, create &amp; run <span aria-hidden="true">→</span>
+                </button>
+              </div>
+            </section>
+          )}
 
           <section className={`approval-card ${approval}`} aria-labelledby="approval-title" data-testid="approval-card">
             <div className="approval-heading">
@@ -1387,8 +1923,8 @@ function TreeFile({
   onSelect: (path: string) => void;
   muted?: boolean;
 }) {
-  const extension = label.endsWith(".json") ? "{}" : label.endsWith(".md") ? "#" : label.endsWith(".env.example") ? "·" : "TS";
-  const shortStatus = status === "modified" ? "M" : status === "added" ? "A" : status?.slice(0, 1).toUpperCase();
+  const extension = label.endsWith(".py") ? "PY" : label.endsWith(".json") ? "{}" : label.endsWith(".md") ? "#" : label.endsWith(".env.example") ? "·" : "TS";
+  const shortStatus = status === "modified" ? "M" : status === "added" ? "A" : status === "local" ? "LOCAL" : status === "draft" ? "DRAFT" : status?.toUpperCase();
   return (
     <button
       className={`tree-row file-row ${active ? "active" : ""} ${muted ? "muted" : ""}`}
@@ -1399,7 +1935,7 @@ function TreeFile({
     >
       <span className={`file-icon ext-${extension.replace(/\W/g, "")}`} aria-hidden="true">{extension}</span>
       <span className="tree-file-label">{label}</span>
-      {shortStatus && <span className={`file-status ${shortStatus === "A" ? "added" : ""}`}>{shortStatus}</span>}
+      {shortStatus && <span className={`file-status ${shortStatus === "A" ? "added" : ""} ${status ?? ""}`}>{shortStatus}</span>}
     </button>
   );
 }
@@ -1417,7 +1953,7 @@ function EditorTab({
   active: boolean;
   onSelect: (path: string) => void;
 }) {
-  const shortStatus = status === "modified" ? "M" : status === "added" ? "A" : status?.slice(0, 1).toUpperCase();
+  const shortStatus = status === "modified" ? "M" : status === "added" ? "A" : status === "local" ? "LOCAL" : status === "draft" ? "DRAFT" : status?.toUpperCase();
   return (
     <button
       className={`editor-tab ${active ? "active" : ""}`}
@@ -1426,9 +1962,9 @@ function EditorTab({
       aria-selected={active}
       onClick={() => onSelect(path)}
     >
-      <span className="tab-language">TS</span>
+      <span className="tab-language">{label.endsWith(".py") ? "PY" : "TS"}</span>
       <span>{label}</span>
-      {shortStatus && <i className={shortStatus === "A" ? "added" : ""}>{shortStatus}</i>}
+      {shortStatus && <i className={`${shortStatus === "A" ? "added" : ""} ${status ?? ""}`}>{shortStatus}</i>}
       <b aria-hidden="true">×</b>
     </button>
   );

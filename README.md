@@ -13,14 +13,22 @@ production-shaped vertical slice of the approved AI Environment System.
 - An OpenAI Agents SDK boundary with a deterministic demo mode when no API key
   is configured, plus structured proposal normalization that redacts
   sensitive-looking output and raises side-effect proposals to human approval.
+- Approval-gated Python file proposals: inspect complete `.py` drafts, approve
+  them into a device-local browser workspace, run the selected entrypoint, and
+  read stdout, stderr, exit status, and duration in the built-in Terminal.
+- A one-shot Pyodide Web Worker execution sandbox with no host filesystem,
+  disabled network bridges, standard-library-only code, strict size/output
+  ceilings, and a hard 8-second code-execution timeout.
 - Exact approval and idempotency contracts for persistent actions.
 - A local-companion foundation for workspace path validation and typed,
   read-only Git operations, with runtime tests for traversal and output limits.
 - Cloudflare/Vinext deployment through OpenAI Sites.
 
-This is intentionally not the final autonomous system. Write-capable local
-tools, sandbox transport, remote Git publication, credential injection, and
-third-party MCP installation remain gated roadmap phases.
+This is intentionally not the final autonomous system. Python files created by
+the interface live in that browser's isolated workspace; they do not mutate the
+host repository or become Git commits. Write-capable host tools, sandbox
+transport, remote Git publication, credential injection, and third-party MCP
+installation remain gated roadmap phases.
 
 ## Run locally
 
@@ -42,6 +50,21 @@ Conductor normalizes the endpoint to Azure Foundry's OpenAI-compatible `/openai/
 Copy `.env.example` to an ignored local environment file and provide the Azure
 API key (or the optional fallback key). Never commit credentials.
 
+## Try the Coding Agent
+
+Enter this in the prompt box at the bottom of the workspace:
+
+```text
+สร้างไฟล์ hello.py ให้พิมพ์ Hello from Python แล้วรันและแสดงผลลัพธ์
+```
+
+Conductor shows the complete draft before doing anything. Select a proposed
+file to inspect it, then choose **Approve, create & run**. The first run loads
+the browser Python runtime; subsequent output appears in **Terminal**. Use
+**Run again** to execute the approved browser-workspace files again. A later
+prompt can name an existing `.py` file to revise it because approved files are
+sent back to the agent as bounded, untrusted workspace context.
+
 ## Verification
 
 ```bash
@@ -57,9 +80,14 @@ surface.
 
 - Model output is treated as a proposal, never authorization.
 - The browser never receives model or provider credentials.
+- Python drafts require an explicit review-and-approve action before they are
+  saved or executed.
+- Each Python execution gets a fresh one-shot Web Worker and in-memory
+  filesystem. Network/host-storage bridges and package installation are
+  disabled, and the worker is terminated after success, failure, or timeout.
 - Approval decisions are bound to task state and idempotency keys.
-- Recording an approval never executes a command; actual execution remains a
-  separately bound companion capability.
+- Repository approval records do not execute host commands. The Python button
+  runs only the reviewed files inside the separate browser sandbox.
 - Repository and tool content is treated as untrusted evidence.
 - The companion foundation has no generic-shell or write capability.
 - Hidden chain-of-thought is not requested or persisted.

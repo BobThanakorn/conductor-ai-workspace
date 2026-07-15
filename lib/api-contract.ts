@@ -1,5 +1,7 @@
 import { z, type ZodError } from "zod";
 
+import { pythonWorkspaceFilesSchema } from "@/lib/agent-safety";
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -109,6 +111,7 @@ export const agentRequestSchema = z
     taskId: identifierSchema.optional(),
     workspaceId: identifierSchema.optional(),
     idempotencyKey: idempotencyKeySchema.optional(),
+    workspaceFiles: pythonWorkspaceFilesSchema.optional(),
   })
   .strict();
 

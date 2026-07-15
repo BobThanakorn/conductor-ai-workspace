@@ -22,7 +22,9 @@ import {
 import {
   agentProposalSchema,
   assessAgentProposal,
+  createDemoAgentProposal,
   formatUntrustedUserRequest,
+  formatUntrustedWorkspaceFiles,
   type AgentProposal,
 } from "@/lib/agent-safety";
 import {
@@ -34,28 +36,13 @@ export const dynamic = "force-dynamic";
 
 type AgentOutput = AgentProposal;
 
-function demoOutput(message: string, taskTitle?: string): AgentOutput {
-  return {
-    summary: `I recorded your follow-up${taskTitle ? ` for “${taskTitle}”` : ""}. I will inspect the smallest relevant code and validation evidence before proposing any mutation.`,
-    plan: [
-      "Inspect the relevant files and current Git diff.",
-      "Retrieve tests, call sites, and repository policy for the affected area.",
-      "Propose a scoped patch and run read-only validation first.",
-    ],
-    proposedAction: `Analyze: ${message.slice(0, 180)}`,
-    riskLevel: "R0",
-    needsApproval: false,
-    evidence: [
-      "Workspace snapshot is bound to the active task branch.",
-      "No filesystem, Git, network, or credentialed action was executed.",
-    ],
-  };
-}
-
 async function runLiveAgent(
   runtime: Extract<AgentRuntimeConfig, { provider: "azure" | "openai" }>,
   message: string,
   context: Awaited<ReturnType<typeof loadAgentContext>>,
+  workspaceFiles: NonNullable<
+    ReturnType<typeof agentRequestSchema.parse>["workspaceFiles"]
+  >,
 ): Promise<AgentOutput> {
   const { Agent, OpenAIProvider, Runner } = await import("@openai/agents");
   const provider = new OpenAIProvider({
@@ -73,6 +60,10 @@ async function runLiveAgent(
       "Do not claim to run tools, change files, access secrets, or publish Git changes.",
       "Return a compact structured proposal only. Do not reveal private reasoning.",
       "Mark any local write or external side effect as R1 or higher and require approval.",
+      "For Python creation requests, you may propose up to eight relative .py file drafts in artifacts.",
+      "Set artifacts to [] for analysis-only requests. Set execution to null unless proposing a bounded run of one drafted entrypoint.",
+      "Never use absolute paths, traversal, shell command strings, or a non-Python entrypoint.",
+      "Executable Python drafts must use the standard library only. Do not propose pip, micropip, package installation, or third-party imports.",
     ].join(" "),
     outputType: agentProposalSchema,
   });
@@ -83,15 +74,16 @@ async function runLiveAgent(
     context.task
       ? `Active task: ${context.task.title}. Goal: ${context.task.goal}. Status: ${context.task.status}.`
       : "No active task is selected.",
+    formatUntrustedWorkspaceFiles(workspaceFiles),
     formatUntrustedUserRequest(message),
-    "Respond with a bounded plan for the next safe step.",
+    "Respond with a bounded plan for the next safe step. A draft or run is only a proposal and always requires approval.",
   ].join("\n");
   const runner = new Runner({
     traceIncludeSensitiveData: false,
     workflowName: "conductor-planning",
   });
   const result = await runner.run(agent, prompt, { maxTurns: 2 });
-  return assessAgentProposal(result.finalOutput).proposal;
+  return agentProposalSchema.parse(result.finalOutput);
 }
 
 function errorBody(error: unknown): { ok: false; error: Record<string, unknown> } {
@@ -149,14 +141,23 @@ export async function POST(request: Request) {
           runtime,
           input.message,
           context,
+          input.workspaceFiles ?? [],
         );
         mode = runtime.provider;
       } catch {
-        output = demoOutput(input.message, context.task?.title);
+        output = createDemoAgentProposal(
+          input.message,
+          context.task?.title,
+          input.workspaceFiles ?? [],
+        );
         liveDiagnostic = "Configured agent unavailable; a safe demo proposal was returned.";
       }
     } else {
-      output = demoOutput(input.message, context.task?.title);
+      output = createDemoAgentProposal(
+        input.message,
+        context.task?.title,
+        input.workspaceFiles ?? [],
+      );
     }
 
     const assessment = assessAgentProposal(output);
@@ -170,9 +171,29 @@ export async function POST(request: Request) {
       ownerToken,
       mode,
       model: configuredModel,
-      promptHash: await digest(canonicalRequest({ message: input.message, context })),
+      promptHash: await digest(
+        canonicalRequest({
+          message: input.message,
+          context,
+          workspaceFiles: input.workspaceFiles ?? [],
+        }),
+      ),
       output,
     });
+
+    await database
+      .prepare(
+        `UPDATE tasks SET model = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE workspace_id = ? AND id = COALESCE(
+           ?,
+           (SELECT id FROM tasks WHERE workspace_id = ?
+            AND status IN ('planning', 'executing', 'validating', 'waiting_for_approval')
+            ORDER BY updated_at DESC LIMIT 1)
+         )`,
+      )
+      .bind(configuredModel, workspaceId, input.taskId ?? null, workspaceId)
+      .run()
+      .catch(() => undefined);
 
     return jsonResponse({
       ...persisted,
