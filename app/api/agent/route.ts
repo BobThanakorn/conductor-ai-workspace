@@ -30,6 +30,7 @@ import {
   AgentProviderConfigurationError,
   normalizeMcpGatewayUrl,
   resolveAgentRuntimeConfig,
+  resolveAgentModelOptions,
   type AgentRuntimeConfig,
 } from "@/lib/agent-provider";
 
@@ -193,6 +194,13 @@ export async function POST(request: Request) {
       }
       throw error;
     }
+    const allowedModels = resolveAgentModelOptions(environmentBindings, runtime);
+    if (input.model && !allowedModels.includes(input.model)) {
+      throw new ApiError(400, "model_not_allowed", "The selected model is not configured for this environment.", {
+        allowedModels,
+      });
+    }
+    if (input.model) runtime = { ...runtime, model: input.model };
     const configuredModel = runtime.model;
     let output: AgentOutput;
     try {

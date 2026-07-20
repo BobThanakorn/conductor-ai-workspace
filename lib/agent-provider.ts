@@ -10,6 +10,7 @@ export type AgentEnvironmentBindings = {
   OPENAI_BASE_URL?: string;
   OPENAI_AGENT_MODEL?: string;
   OPENAI_MODEL?: string;
+  CONDUCTOR_MODEL_OPTIONS?: string;
   MCP_GATEWAY_URL?: string;
 };
 
@@ -104,6 +105,21 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
   }
 
   throw new AgentProviderConfigurationError();
+}
+
+export function resolveAgentModelOptions(
+  bindings: AgentEnvironmentBindings,
+  runtime = resolveAgentRuntimeConfig(bindings),
+): string[] {
+  const configuredOptions = configured(bindings.CONDUCTOR_MODEL_OPTIONS)
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 32) ?? [];
+  return [runtime.model, ...configuredOptions].filter(
+    (value, index, values) => values.indexOf(value) === index,
+  );
 }
 
 export function normalizeMcpGatewayUrl(value: string | undefined): string | undefined {

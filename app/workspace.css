@@ -2914,6 +2914,61 @@
   white-space: nowrap;
 }
 
+.model-picker {
+  position: relative;
+  flex: 0 1 auto;
+}
+
+.model-button:hover {
+  color: var(--text);
+  background: #272b29;
+}
+
+.model-status-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 0 2px rgba(139, 182, 232, 0.1);
+}
+
+.model-caret { color: var(--muted); font-size: 10px; }
+
+.model-menu {
+  position: absolute;
+  right: 0;
+  bottom: 28px;
+  z-index: 20;
+  min-width: 220px;
+  padding: 5px;
+  border: 1px solid #3a403c;
+  border-radius: 7px;
+  background: #171a19;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.48);
+}
+
+.model-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 29px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-soft);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: 10px var(--font-geist-mono), ui-monospace, monospace;
+}
+
+.model-menu button:hover,
+.model-menu button.selected { color: var(--text); background: #252a27; }
+.model-menu button b { margin-left: auto; color: var(--green-bright); }
+.model-menu small { display: block; padding: 7px 8px 4px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+
 .topbar-actions .connection-state {
   max-width: 155px;
   overflow: hidden;

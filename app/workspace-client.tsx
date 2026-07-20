@@ -186,6 +186,13 @@ type AgentApiResponse = {
   mode?: string;
 };
 
+type ModelApiResponse = {
+  ok?: boolean;
+  model?: string;
+  models?: string[];
+  provider?: string;
+};
+
 type WorkspaceApiResponse = {
   workspace?: {
     id?: string;
@@ -525,6 +532,8 @@ export default function WorkspaceClient() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [environmentPickerOpen, setEnvironmentPickerOpen] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [newAgentTitle, setNewAgentTitle] = useState("");
   const [newAgentGoal, setNewAgentGoal] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -769,6 +778,25 @@ export default function WorkspaceClient() {
   }, [loadWorkspace, refreshLocalGit]);
 
   useEffect(() => {
+    void fetch("/api/models", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return await response.json() as ModelApiResponse;
+      })
+      .then((data) => {
+        if (!data) return;
+        const options = Array.isArray(data.models) ? data.models.filter((model): model is string => typeof model === "string" && Boolean(model.trim())) : [];
+        if (options.length) {
+          setModelOptions(options);
+          if (!agentModelOverride.current && data.model) {
+            setWorkspace((current) => ({ ...current, model: data.model as string }));
+          }
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (pendingProposal) inspectorPanelRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, [pendingProposal]);
 
@@ -779,6 +807,7 @@ export default function WorkspaceClient() {
         setInspectorOpen(false);
         setSessionPickerOpen(false);
         setEnvironmentPickerOpen(false);
+        setModelPickerOpen(false);
       }
     }
     window.addEventListener("keydown", closePanels);
@@ -1343,6 +1372,7 @@ export default function WorkspaceClient() {
         body: JSON.stringify({
           message,
           mode: agentMode,
+          ...(agentModelOverride.current ? { model: agentModelOverride.current } : {}),
           ...(workspace.taskId ? { taskId: workspace.taskId } : {}),
           workspaceId: workspace.id,
           workspaceFiles: workspaceContextFiles,
@@ -2204,7 +2234,44 @@ export default function WorkspaceClient() {
                   <button type="button" role="tab" aria-selected={agentMode === "agent"} className={agentMode === "agent" ? "active" : ""} onClick={() => setAgentMode("agent")}><span className="mode-dot" />Agent</button>
                   <button type="button" role="tab" aria-selected={agentMode === "ask"} className={agentMode === "ask" ? "active" : ""} onClick={() => setAgentMode("ask")}>Ask</button>
                 </div>
-                <button type="button" className="model-button" title={workspace.model}>{workspace.model}</button>
+                <div className="model-picker">
+                  <button
+                    type="button"
+                    className="model-button"
+                    title="Choose a configured model"
+                    aria-haspopup="listbox"
+                    aria-expanded={modelPickerOpen}
+                    onClick={() => setModelPickerOpen((open) => !open)}
+                  >
+                    <span className="model-status-dot" aria-hidden="true" />
+                    {workspace.model}
+                    <span className="model-caret" aria-hidden="true">⌄</span>
+                  </button>
+                  {modelPickerOpen && (
+                    <div className="model-menu" role="listbox" aria-label="Configured models">
+                      {(modelOptions.length ? modelOptions : [workspace.model]).map((model) => (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={workspace.model === model}
+                          className={workspace.model === model ? "selected" : ""}
+                          key={model}
+                          onClick={() => {
+                            agentModelOverride.current = model;
+                            setWorkspace((current) => ({ ...current, model }));
+                            setModelPickerOpen(false);
+                            showNotice(`Model selected: ${model}`);
+                          }}
+                        >
+                          <span className="model-status-dot" aria-hidden="true" />
+                          <span>{model}</span>
+                          {workspace.model === model && <b>✓</b>}
+                        </button>
+                      ))}
+                      {!modelOptions.length && <small>Only the server-configured model is available.</small>}
+                    </div>
+                  )}
+                </div>
                 <span className="composer-spacer" />
                 <span className="send-hint"><kbd>Ctrl</kbd><kbd>↵</kbd></span>
                 <button

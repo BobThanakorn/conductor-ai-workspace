@@ -109,6 +109,7 @@ export const agentRequestSchema = z
   .object({
     message: z.string().trim().min(1).max(6_000),
     mode: z.enum(["agent", "ask"]).default("agent"),
+    model: z.string().trim().min(1).max(200).optional(),
     taskId: identifierSchema.optional(),
     workspaceId: identifierSchema.optional(),
     idempotencyKey: idempotencyKeySchema.optional(),
