@@ -582,6 +582,21 @@ export default function WorkspaceClient() {
     }
   }, []);
 
+  async function ensureLocalGitConnection() {
+    if (localGitConnected) return true;
+    try {
+      const response = await fetch(`${LOCAL_GIT_COMPANION}/git/status`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Local Git companion unavailable");
+      const data = (await response.json()) as LocalGitStatus;
+      if (!data.ok) throw new Error("Local Git companion returned an error");
+      await refreshLocalGit(true);
+      return true;
+    } catch {
+      setLocalGitConnected(false);
+      return false;
+    }
+  }
+
   const loadWorkspace = useCallback(async (silent = false, signal?: AbortSignal) => {
     if (!silent) setApiState("connecting");
     try {
@@ -1044,7 +1059,8 @@ export default function WorkspaceClient() {
 
   async function approvePythonProposal() {
     if (!pendingProposal) return;
-    if (!localGitConnected) {
+    const companionReady = await ensureLocalGitConnection();
+    if (!companionReady) {
       setTerminalLines((current) => [
         ...current.slice(-12),
         { type: "error", text: " Repository changes require a running local execution companion." },
@@ -1069,10 +1085,9 @@ export default function WorkspaceClient() {
           timeoutMs: proposalTimeoutMs,
         }
       : null;
-    if (localGitConnected) {
-      setExecutionState("running");
-      setBottomPanel("terminal");
-      try {
+    setExecutionState("running");
+    setBottomPanel("terminal");
+    try {
         const writeInput = { files: files.map(({ path, content }) => ({ path, content })) };
         const writeToken = await getCompanionApproval("fs.write", writeInput);
         const writeResponse = await fetch(`${LOCAL_GIT_COMPANION}/fs/write`, {
@@ -1125,14 +1140,12 @@ export default function WorkspaceClient() {
         await refreshLocalGit(true);
         showNotice(`${files.length} repository file${files.length === 1 ? "" : "s"} created and executed`);
         return;
-      } catch (error) {
-        setExecutionState("failed");
-        setTerminalLines((current) => [...current.slice(-4), { type: "error", text: ` ${error instanceof Error ? error.message : "Repository execution failed"}` }]);
-        showNotice("Repository execution failed; proposal remains available for review");
-        return;
-      }
+    } catch (error) {
+      setExecutionState("failed");
+      setTerminalLines((current) => [...current.slice(-4), { type: "error", text: ` ${error instanceof Error ? error.message : "Repository execution failed"}` }]);
+      showNotice("Repository execution failed; proposal remains available for review");
+      return;
     }
-
   }
 
   function rejectPythonProposal() {
@@ -1728,7 +1741,8 @@ export default function WorkspaceClient() {
                   className="proposal-approve"
                   type="button"
                   onClick={() => void approvePythonProposal()}
-                  disabled={!localGitConnected || !draftPythonFiles.length || (Boolean(pendingProposal.execution) && !proposalEntrypoint) || proposalArgs === null || executionState === "running"}
+                  disabled={!draftPythonFiles.length || (Boolean(pendingProposal.execution) && !proposalEntrypoint) || proposalArgs === null || executionState === "running"}
+                  title={localGitConnected ? "Apply the reviewed files and run the proposed verification" : "The companion will be reconnected when you approve"}
                   data-testid="approve-create-run"
                 >
                   {pendingProposal.execution ? "Approve, apply & run" : "Approve & apply files"} <span aria-hidden="true">→</span>
