@@ -20,6 +20,10 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(layout, /Conductor — AI engineering workspace/);
   assert.match(workspace, /data-testid="conductor-workspace"/);
   assert.match(workspace, /Context inspector/);
+  assert.match(workspace, /Agent mode/);
+  assert.match(workspace, /Source control/);
+  assert.match(workspace, /Manage context/);
+  assert.match(workspace, /mode: agentMode/);
   assert.match(workspace, /No approval pending/);
   assert.match(workspace, /TASK TERMINAL/);
   assert.match(workspace, /fileTree/);
@@ -43,6 +47,8 @@ test("builds the Conductor workspace shell", async () => {
   assert.doesNotMatch(agentRoute, /createDemoAgentProposal|liveDiagnostic|provider\s*!==\s*["']demo/i);
   assert.match(agentRoute, /previous provider attempt did not produce a valid structured proposal/i);
   assert.match(agentRoute, /enable_thinking:\s*false/);
+  assert.match(agentRoute, /This request is in Ask mode/);
+  assert.match(agentRoute, /read_only_answer/);
   assert.doesNotMatch(provider, /provider:\s*["']demo["']/i);
   assert.doesNotMatch(environmentStore, /demoFileTree|demoDiff|Atlas Engineering|Harden session validation/i);
   assert.ok(Object.keys(JSON.parse(builtManifest)).length > 0);

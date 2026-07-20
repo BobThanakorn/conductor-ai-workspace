@@ -17,6 +17,17 @@ type ApprovalState = "pending" | "approved" | "denied";
 type BottomPanel = "terminal" | "git";
 type EventState = "complete" | "active" | "waiting" | "queued";
 type ApiState = "connecting" | "connected" | "unavailable";
+type AgentMode = "agent" | "ask";
+type AgentPanelView = "chat" | "context";
+type ExplorerView = "files" | "changes";
+
+type ChatEntry = {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+  plan?: string[];
+  status?: "ready" | "working" | "error";
+};
 
 type TimelineEvent = {
   id: string;
@@ -486,6 +497,9 @@ export default function WorkspaceClient() {
   const [apiState, setApiState] = useState<ApiState>("connecting");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
   const [bottomPanel, setBottomPanel] = useState<BottomPanel>("terminal");
+  const [agentMode, setAgentMode] = useState<AgentMode>("agent");
+  const [agentPanelView, setAgentPanelView] = useState<AgentPanelView>("chat");
+  const [explorerView, setExplorerView] = useState<ExplorerView>("files");
   const [activeFile, setActiveFile] = useState("");
   const [fileTree, setFileTree] = useState<FileTreeNode[]>(EMPTY_FILE_TREE);
   const [serverDiff, setServerDiff] = useState<WorkspaceDiff | null>(null);
@@ -508,6 +522,14 @@ export default function WorkspaceClient() {
   const [repositoryFileContents, setRepositoryFileContents] = useState<Record<string, string>>({});
   const [localGitConnected, setLocalGitConnected] = useState(false);
   const [acceptedFiles, setAcceptedFiles] = useState<Set<string>>(() => new Set());
+  const [chatEntries, setChatEntries] = useState<ChatEntry[]>([
+    {
+      id: "welcome",
+      role: "agent",
+      content: "I can inspect this repository, propose multi-file changes, run reviewed commands, and help prepare Git changes.",
+      status: "ready",
+    },
+  ]);
   const inspectorPanelRef = useRef<HTMLElement | null>(null);
 
   const refreshLocalGit = useCallback(async (silent = true) => {
@@ -1195,6 +1217,12 @@ export default function WorkspaceClient() {
 
     setPrompt("");
     setBusyAction("agent");
+    setAgentPanelView("chat");
+    setChatEntries((current) => [
+      ...current,
+      { id: `user-${Date.now()}`, role: "user", content: message },
+      { id: `working-${Date.now()}`, role: "agent", content: agentMode === "ask" ? "Inspecting the selected context…" : "Planning the change and preparing a review…", status: "working" },
+    ]);
     setTimeline((current) => [
       ...current.slice(-6).map((item) => ({
         ...item,
@@ -1226,6 +1254,7 @@ export default function WorkspaceClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message,
+          mode: agentMode,
           ...(workspace.taskId ? { taskId: workspace.taskId } : {}),
           workspaceId: workspace.id,
           workspaceFiles: workspaceContextFiles,
@@ -1248,12 +1277,23 @@ export default function WorkspaceClient() {
         setWorkspace((current) => ({ ...current, model: data.model as string }));
       }
       if (data.output) {
+        setChatEntries((current) => [
+          ...current.filter((entry) => entry.status !== "working"),
+          {
+            id: `agent-${Date.now()}`,
+            role: "agent",
+            content: data.output?.summary ?? "Agent response ready.",
+            plan: data.output?.plan,
+            status: "ready",
+          },
+        ]);
         const draftFiles = normalizePythonFiles(data.output.artifacts);
         if (draftFiles.length) {
           setPendingProposal(data.output);
           setSelectedGeneratedFile(draftFiles[0].path);
           setActiveFile(draftFiles[0].path);
           setViewMode("code");
+          setAgentPanelView("chat");
           setInspectorOpen(true);
         } else {
           const rejectedArtifacts = Array.isArray(data.output.artifacts) && data.output.artifacts.length > 0;
@@ -1279,6 +1319,10 @@ export default function WorkspaceClient() {
       showNotice(normalizePythonFiles(data.output?.artifacts).length ? "Proposal ready for review" : "Agent response ready");
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Agent request failed.";
+      setChatEntries((current) => [
+        ...current.filter((entry) => entry.status !== "working"),
+        { id: `error-${Date.now()}`, role: "agent", content: errorMessage, status: "error" },
+      ]);
       setPrompt(message);
       setTerminalLines((current) => [
         ...current.slice(-16),
@@ -1365,9 +1409,17 @@ export default function WorkspaceClient() {
         </div>
 
         <div className="topbar-actions">
+          <span className={`connection-state ${localGitConnected ? "connected" : "unavailable"}`} title={localGitConnected ? workspace.repositoryPath : "Execution companion disconnected"}>
+            <span className="connection-dot" aria-hidden="true" />
+            {localGitConnected ? "Repository" : "No repository"}
+          </span>
           <span className={`connection-state ${apiState}`} title={apiLabel}>
             <span className="connection-dot" aria-hidden="true" />
-            {apiLabel}
+            Agent
+          </span>
+          <span className={`connection-state ${workspace.model !== "Not configured" ? "connected" : "unavailable"}`} title={workspace.model}>
+            <span className="connection-dot" aria-hidden="true" />
+            {workspace.model === "Not configured" ? "No model" : workspace.model}
           </span>
           <button
             className="icon-button"
@@ -1395,9 +1447,39 @@ export default function WorkspaceClient() {
           />
         )}
 
+        <nav className="activity-rail" aria-label="Workspace views">
+          <button
+            type="button"
+            className={explorerView === "files" && !inspectorOpen ? "active" : ""}
+            onClick={() => { setExplorerView("files"); setExplorerOpen(true); }}
+            aria-label="Explorer"
+            title="Explorer"
+          >▱</button>
+          <button
+            type="button"
+            className={explorerView === "changes" && !inspectorOpen ? "active" : ""}
+            onClick={() => { setExplorerView("changes"); setExplorerOpen(true); }}
+            aria-label="Source control"
+            title="Source control"
+          >⑂<span>{changedFiles.length || ""}</span></button>
+          <button
+            type="button"
+            className={inspectorOpen ? "active" : ""}
+            onClick={() => setInspectorOpen(true)}
+            aria-label="Agent"
+            title="Agent"
+          >✦</button>
+          <span className="activity-spacer" />
+          <button type="button" onClick={() => setBottomPanel("terminal")} aria-label="Terminal" title="Terminal">⌘</button>
+          <button type="button" onClick={() => { setAgentPanelView("context"); setInspectorOpen(true); }} aria-label="Settings and context" title="Context">⚙</button>
+        </nav>
+
         <aside className={`explorer-panel ${explorerOpen ? "is-open" : ""}`} aria-label="File explorer">
           <div className="panel-title-row">
-            <span className="eyebrow">Explorer</span>
+            <div className="explorer-view-tabs" role="tablist" aria-label="Explorer view">
+              <button type="button" role="tab" aria-selected={explorerView === "files"} className={explorerView === "files" ? "active" : ""} onClick={() => setExplorerView("files")}>Explorer</button>
+              <button type="button" role="tab" aria-selected={explorerView === "changes"} className={explorerView === "changes" ? "active" : ""} onClick={() => setExplorerView("changes")}>Changes <span>{changedFiles.length}</span></button>
+            </div>
             <div className="panel-actions">
               <button type="button" aria-label="Refresh files" onClick={() => void refreshLocalGit(false)}>↻</button>
             </div>
@@ -1409,19 +1491,36 @@ export default function WorkspaceClient() {
             <span className="change-count">{changedFiles.length}</span>
           </button>
 
-          <nav className="file-tree" aria-label="Repository files" data-testid="file-tree">
-            {!displayFileTree.length && <div className="proposal-empty">Connect the local companion to load repository files.</div>}
-            {displayFileTree.map((node) => (
-              <TreeNodeView
-                key={node.id}
-                node={node}
-                folders={folders}
-                activeFile={activeFile}
-                onToggle={toggleFolder}
-                onSelect={selectFile}
-              />
-            ))}
-          </nav>
+          {explorerView === "files" ? (
+            <nav className="file-tree" aria-label="Repository files" data-testid="file-tree">
+              {!displayFileTree.length && <div className="proposal-empty">Connect a repository to start working with the Agent.</div>}
+              {displayFileTree.map((node) => (
+                <TreeNodeView
+                  key={node.id}
+                  node={node}
+                  folders={folders}
+                  activeFile={activeFile}
+                  onToggle={toggleFolder}
+                  onSelect={selectFile}
+                />
+              ))}
+            </nav>
+          ) : (
+            <nav className="file-tree changes-tree" aria-label="Changed repository files">
+              <div className="changes-summary"><span>{changedFiles.length} changed files</span><b>Review before commit</b></div>
+              {!changedFiles.length && <div className="proposal-empty">Working tree clean.</div>}
+              {changedFiles.map((file) => (
+                <TreeFile
+                  key={file.id}
+                  label={file.name}
+                  path={file.id}
+                  status={file.status}
+                  active={activeFile === file.id}
+                  onSelect={selectFile}
+                />
+              ))}
+            </nav>
+          )}
 
           <div className="explorer-spacer" />
           <section className="workspace-scope" aria-label="Workspace isolation status">
@@ -1638,46 +1737,23 @@ export default function WorkspaceClient() {
             </div>
           </section>
 
-          <form className="task-composer" onSubmit={submitTask} data-testid="task-prompt">
-            <div className="composer-leading" aria-hidden="true">
-              <span className="agent-orb"><i /></span>
-            </div>
-            <div className="composer-body">
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={handlePromptKeyDown}
-                placeholder="Ask Conductor to inspect, change, or verify this workspace…"
-                aria-label="Task prompt"
-                rows={2}
-              />
-              <div className="composer-options">
-                <span><span className="mode-dot" /> Plan & propose</span>
-                <span>{workspace.model}</span>
-                <span className="composer-context">{context.sources.length} sources · {context.tokenBudget.used.toLocaleString()} estimated tokens</span>
-                <span className="composer-spacer" />
-                <span className="send-hint"><kbd>⌘</kbd><kbd>↵</kbd></span>
-                <button
-                  className="send-button"
-                  type="submit"
-                  aria-label="Send task to Conductor"
-                  disabled={!prompt.trim() || busyAction !== null}
-                  data-testid="send-task-button"
-                >
-                  {busyAction === "agent" ? "…" : "↑"}
-                </button>
-              </div>
-            </div>
-          </form>
         </main>
 
         <aside ref={inspectorPanelRef} className={`inspector-panel ${inspectorOpen ? "is-open" : ""}`} aria-label="Task and context inspector">
+          <div className="agent-panel-header">
+            <div className="agent-panel-tabs" role="tablist" aria-label="Agent panel">
+              <button type="button" role="tab" aria-selected={agentPanelView === "chat"} className={agentPanelView === "chat" ? "active" : ""} onClick={() => setAgentPanelView("chat")}>Agent</button>
+              <button type="button" role="tab" aria-selected={agentPanelView === "context"} className={agentPanelView === "context" ? "active" : ""} onClick={() => setAgentPanelView("context")}>Context <span>{context.sources.length}</span></button>
+            </div>
+            <button type="button" className="new-chat-button" onClick={() => { setChatEntries([chatEntries[0]]); setPendingProposal(null); setPrompt(""); }} aria-label="Start new chat" title="New chat">＋</button>
+          </div>
+
           <div className="run-header">
             <div>
-              <span className="eyebrow">Active run</span>
+              <span className="eyebrow">{busyAction === "agent" ? "Agent working" : pendingProposal ? "Ready for review" : "Workspace session"}</span>
               <div className="run-title-row">
                 <strong>{workspace.taskTitle}</strong>
-                <span className="run-live"><i aria-hidden="true" /> {workspace.taskStatus.replaceAll("_", " ")}</span>
+                <span className={`run-live ${pendingProposal ? "review" : ""}`}><i aria-hidden="true" /> {pendingProposal ? "approval required" : workspace.taskStatus.replaceAll("_", " ")}</span>
               </div>
             </div>
           </div>
@@ -1694,7 +1770,24 @@ export default function WorkspaceClient() {
             })}
           </div>
 
-          {pendingProposal && (
+          {agentPanelView === "chat" && (
+            <section className="agent-conversation" aria-label="Agent conversation" aria-live="polite">
+              {chatEntries.map((entry) => (
+                <article className={`chat-entry ${entry.role} ${entry.status ?? ""}`} key={entry.id}>
+                  <div className="chat-entry-heading">
+                    <span>{entry.role === "user" ? "You" : "Conductor"}</span>
+                    {entry.status === "working" && <i>Working…</i>}
+                  </div>
+                  <p>{entry.content}</p>
+                  {entry.plan?.length ? (
+                    <ol>{entry.plan.map((step, index) => <li key={`${entry.id}-${index}`}>{step}</li>)}</ol>
+                  ) : null}
+                </article>
+              ))}
+            </section>
+          )}
+
+          {agentPanelView === "chat" && pendingProposal && (
             <section
               className="python-proposal-card"
               aria-labelledby="python-proposal-title"
@@ -1775,7 +1868,7 @@ export default function WorkspaceClient() {
             </section>
           )}
 
-          <section className={`approval-card ${approval}`} aria-labelledby="approval-title" data-testid="approval-card">
+          {agentPanelView === "chat" && <section className={`approval-card ${approval}`} aria-labelledby="approval-title" data-testid="approval-card">
             <div className="approval-heading">
               <span className="approval-icon" aria-hidden="true">
                 {approval === "approved" ? "✓" : approval === "denied" ? "×" : "!"}
@@ -1850,9 +1943,9 @@ export default function WorkspaceClient() {
                 Refresh policy state
               </button>
             )}
-          </section>
+          </section>}
 
-          <section className="inspector-section timeline-section" aria-labelledby="timeline-title" data-testid="agent-timeline">
+          {agentPanelView === "chat" && <section className="inspector-section timeline-section" aria-labelledby="timeline-title" data-testid="agent-timeline">
             <div className="section-heading">
               <div>
                 <span className="eyebrow">Agent activity</span>
@@ -1877,9 +1970,9 @@ export default function WorkspaceClient() {
                 </li>
               ))}
             </ol>
-          </section>
+          </section>}
 
-          <section className="inspector-section context-section" aria-labelledby="context-title" data-testid="context-inspector">
+          {agentPanelView === "context" && <section className="inspector-section context-section" aria-labelledby="context-title" data-testid="context-inspector">
             <div className="section-heading">
               <div>
                 <span className="eyebrow">Grounding</span>
@@ -1914,9 +2007,9 @@ export default function WorkspaceClient() {
               <code>{context.snapshot}</code>
               <b>{context.freshness}</b>
             </div>
-          </section>
+          </section>}
 
-          <div className="inspector-footer">
+          <div className="inspector-footer agent-utility-actions">
             <button
               className="secondary-action"
               type="button"
@@ -1930,6 +2023,44 @@ export default function WorkspaceClient() {
               Stop run
             </button>
           </div>
+
+          <form className="task-composer agent-composer" onSubmit={submitTask} data-testid="task-prompt">
+            <div className="composer-body">
+              <div className="context-pills" aria-label="Prompt context">
+                <span className="context-pill active-file">@ {activeFile || "workspace"}</span>
+                {context.sources.filter((source) => source !== activeFile).slice(0, 2).map((source) => (
+                  <span className="context-pill" key={source}>@ {source.split("/").at(-1)}</span>
+                ))}
+                <button type="button" onClick={() => setAgentPanelView("context")} aria-label="Manage context">＋</button>
+              </div>
+              <textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={handlePromptKeyDown}
+                placeholder={agentMode === "ask" ? "Ask about this codebase…" : "Build, change, or verify this workspace…"}
+                aria-label="Task prompt"
+                rows={3}
+              />
+              <div className="composer-options">
+                <div className="agent-mode-toggle" role="tablist" aria-label="Agent mode">
+                  <button type="button" role="tab" aria-selected={agentMode === "agent"} className={agentMode === "agent" ? "active" : ""} onClick={() => setAgentMode("agent")}><span className="mode-dot" />Agent</button>
+                  <button type="button" role="tab" aria-selected={agentMode === "ask"} className={agentMode === "ask" ? "active" : ""} onClick={() => setAgentMode("ask")}>Ask</button>
+                </div>
+                <button type="button" className="model-button" title={workspace.model}>{workspace.model}</button>
+                <span className="composer-spacer" />
+                <span className="send-hint"><kbd>Ctrl</kbd><kbd>↵</kbd></span>
+                <button
+                  className="send-button"
+                  type="submit"
+                  aria-label="Send task to Conductor"
+                  disabled={!prompt.trim() || busyAction !== null}
+                  data-testid="send-task-button"
+                >
+                  {busyAction === "agent" ? "…" : "↑"}
+                </button>
+              </div>
+            </div>
+          </form>
         </aside>
       </div>
 

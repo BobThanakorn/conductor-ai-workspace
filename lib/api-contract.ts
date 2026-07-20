@@ -108,6 +108,7 @@ export type WorkspaceAction = z.infer<typeof workspaceActionSchema>;
 export const agentRequestSchema = z
   .object({
     message: z.string().trim().min(1).max(6_000),
+    mode: z.enum(["agent", "ask"]).default("agent"),
     taskId: identifierSchema.optional(),
     workspaceId: identifierSchema.optional(),
     idempotencyKey: idempotencyKeySchema.optional(),

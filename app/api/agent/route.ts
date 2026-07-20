@@ -40,6 +40,7 @@ type AgentOutput = AgentProposal;
 async function runLiveAgent(
   runtime: AgentRuntimeConfig,
   message: string,
+  requestMode: "agent" | "ask",
   context: Awaited<ReturnType<typeof loadAgentContext>>,
   workspaceFiles: NonNullable<
     ReturnType<typeof agentRequestSchema.parse>["workspaceFiles"]
@@ -82,6 +83,9 @@ async function runLiveAgent(
       "The execution entrypoint must exactly match one proposed artifact path. Never use an interpreter name as the entrypoint.",
       "An explicit command must be complete and non-interactive; never return only python, python3, node, npm, npx, or a shell name.",
       "All writes and commands are proposals; the local execution companion will require a payload-bound human approval before acting.",
+      requestMode === "ask"
+        ? "This request is in Ask mode. Analyze and explain only. Return no artifacts, no execution command, R0 risk, and no approval requirement."
+        : "This request is in Agent mode. You may propose reviewed file drafts and one bounded verification command when implementation is requested.",
     ].join(" "),
     outputType: agentProposalSchema,
     modelSettings: {
@@ -195,6 +199,7 @@ export async function POST(request: Request) {
       output = await runLiveAgent(
         runtime,
         input.message,
+        input.mode,
         context,
         input.workspaceFiles ?? [],
         input.workspace,
@@ -207,6 +212,17 @@ export async function POST(request: Request) {
         "agent_provider_unavailable",
         "The configured model provider did not complete the request. No proposal was generated.",
       );
+    }
+
+    if (input.mode === "ask") {
+      output = {
+        ...output,
+        proposedAction: "read_only_answer",
+        riskLevel: "R0",
+        needsApproval: false,
+        artifacts: [],
+        execution: null,
+      };
     }
 
     const assessment = assessAgentProposal(output);
@@ -223,6 +239,7 @@ export async function POST(request: Request) {
       promptHash: await digest(
         canonicalRequest({
           message: input.message,
+          mode: input.mode,
           context,
           workspaceFiles: input.workspaceFiles ?? [],
         }),
