@@ -51,8 +51,9 @@ async function runLiveAgent(
   const provider = new OpenAIProvider({
     apiKey: runtime.apiKey,
     ...(runtime.baseURL ? { baseURL: runtime.baseURL } : {}),
-    useResponses: true,
+    useResponses: runtime.provider === "azure" || !runtime.baseURL,
   });
+  const customOpenAICompatibleProvider = runtime.provider === "openai" && Boolean(runtime.baseURL);
 
   const mcpServer = mcpGatewayUrl
     ? new MCPServerStreamableHttp({
@@ -84,8 +85,11 @@ async function runLiveAgent(
     ].join(" "),
     outputType: agentProposalSchema,
     modelSettings: {
-      maxTokens: 16_000,
+      maxTokens: customOpenAICompatibleProvider ? 4_096 : 16_000,
       store: false,
+      ...(customOpenAICompatibleProvider
+        ? { providerData: { chat_template_kwargs: { enable_thinking: false } } }
+        : {}),
     },
     mcpServers: mcpServer ? [mcpServer] : [],
     mcpConfig: { includeServerInToolNames: true, convertSchemasToStrict: true },

@@ -107,6 +107,21 @@ AZURE_AI_FOUNDRY_MODEL=gpt-5.1-codex-mini
 enables GitHub HTTPS authentication and pull-request creation. Never commit
 credential values.
 
+An authenticated OpenAI-compatible vLLM server on a private network can be used
+with:
+
+```bash
+OPENAI_BASE_URL=http://10.0.0.10:9020/v1
+OPENAI_AGENT_MODEL=your-vllm-model-id
+docker compose -f compose.yaml -f compose.openai.yaml up --build
+```
+
+Put its bearer token in `secret.openai-api-key`. Custom OpenAI-compatible
+endpoints use Chat Completions with bounded output and thinking disabled so
+structured coding proposals complete within the UI request window. Unencrypted
+HTTP endpoints are accepted only on loopback, Docker-local, or RFC1918 private
+network addresses; use HTTPS for public hosts.
+
 For Docker secrets, copy the matching `.example` file without the `.example`
 suffix and replace its single line with the key. Docker mounts it under
 `/run/secrets`; the entrypoint loads it only into the relevant service process.

@@ -58,6 +58,29 @@ test("supports an OpenAI-compatible Docker Model Runner endpoint", () => {
   }
 });
 
+test("supports an authenticated vLLM endpoint on a private network", () => {
+  const runtime = resolveAgentRuntimeConfig({
+    OPENAI_API_KEY: "test-vllm-key",
+    OPENAI_BASE_URL: "http://10.4.93.66:9020/v1",
+    OPENAI_AGENT_MODEL: "Qwen/Qwen3.6-35B-A3B",
+  });
+  assert.equal(runtime.provider, "openai");
+  if (runtime.provider === "openai") {
+    assert.equal(runtime.baseURL, "http://10.4.93.66:9020/v1");
+    assert.equal(runtime.model, "Qwen/Qwen3.6-35B-A3B");
+  }
+});
+
+test("rejects an unencrypted model endpoint on a public network", () => {
+  assert.throws(
+    () => resolveAgentRuntimeConfig({
+      OPENAI_API_KEY: "test-key",
+      OPENAI_BASE_URL: "http://203.0.113.10/v1",
+    }),
+    /trusted private-network model host/,
+  );
+});
+
 test("accepts only HTTPS or the local Compose MCP gateway", () => {
   assert.equal(normalizeMcpGatewayUrl("http://mcp-gateway:8811/"), "http://mcp-gateway:8811");
   assert.throws(() => normalizeMcpGatewayUrl("http://example.com/mcp"), /MCP_GATEWAY_URL/);

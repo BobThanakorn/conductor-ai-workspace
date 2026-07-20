@@ -39,6 +39,17 @@ function configured(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
+function isPrivateNetworkHost(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".docker.internal") || hostname === "model-runner") {
+    return true;
+  }
+  const octets = hostname.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
+  return octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168);
+}
+
 export function normalizeAzureFoundryBaseUrl(endpoint: string): string {
   const url = new URL(endpoint);
   const host = url.hostname.toLowerCase();
@@ -75,14 +86,9 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
     let baseURL: string | undefined;
     if (configuredBaseUrl) {
       const url = new URL(configuredBaseUrl);
-      const localHttp = url.protocol === "http:" && (
-        url.hostname === "localhost" ||
-        url.hostname === "127.0.0.1" ||
-        url.hostname.endsWith(".docker.internal") ||
-        url.hostname === "model-runner"
-      );
+      const localHttp = url.protocol === "http:" && isPrivateNetworkHost(url.hostname);
       if ((!localHttp && url.protocol !== "https:") || url.username || url.password || url.hash) {
-        throw new Error("OPENAI_BASE_URL must use HTTPS or a trusted local Docker Model Runner host.");
+        throw new Error("OPENAI_BASE_URL must use HTTPS or a trusted private-network model host.");
       }
       baseURL = url.toString().replace(/\/$/, "");
     }
