@@ -1,0 +1,74 @@
+name: conductor
+
+x-conductor-image: &conductor-image
+  image: ${CONDUCTOR_IMAGE:-conductor-ai-workspace:local}
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  web:
+    <<: *conductor-image
+    command: ["npm", "run", "start:container"]
+    init: true
+    ports:
+      - "127.0.0.1:${CONDUCTOR_WEB_PORT:-3000}:3000"
+    environment:
+      AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-https://ai-environment-resource.services.ai.azure.com}
+      AZURE_AI_FOUNDRY_API_KEY: ${AZURE_AI_FOUNDRY_API_KEY:-}
+      AZURE_AI_FOUNDRY_MODEL: ${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+    volumes:
+      - conductor-data:/data
+    depends_on:
+      companion:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1.5
+
+  companion:
+    <<: *conductor-image
+    command: ["npm", "run", "companion:git"]
+    init: true
+    ports:
+      - "127.0.0.1:${CONDUCTOR_COMPANION_PORT:-8765}:8765"
+    environment:
+      CONDUCTOR_COMPANION_HOST: 0.0.0.0
+      CONDUCTOR_COMPANION_PORT: 8765
+      CONDUCTOR_WORKSPACE_ROOT: /workspace
+      CONDUCTOR_EXECUTION_MODE: container
+      CONDUCTOR_ALLOWED_ORIGINS: ${CONDUCTOR_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /workspace
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GIT_HTTP_USERNAME: ${GIT_HTTP_USERNAME:-x-access-token}
+      GIT_ASKPASS: /usr/local/bin/conductor-git-askpass
+      GIT_TERMINAL_PROMPT: "0"
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH:-.}
+        target: /workspace
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+
+volumes:
+  conductor-data:

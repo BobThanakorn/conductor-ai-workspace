@@ -1,23 +1,30 @@
-# Conductor local companion foundation
+# Conductor execution companion
 
-This folder defines the security boundary for a future workspace-local execution
-companion. It deliberately exposes only three typed, read-only Git capabilities:
-status, diff, and log.
+The companion is the repository execution plane. It exposes filesystem,
+terminal, Git, and provider operations while keeping model credentials out of
+browser code.
 
-The companion validates a versioned command envelope, enforces an exact
-capability-to-command mapping, canonicalizes the workspace root, rejects path
-traversal, enforces a deadline, computes an action digest, and caps stdout and
-stderr independently. It invokes the literal `git` executable with a fixed
-read-only verb and validated argument vector (`shell: false`). Repository-driven
-pagers, prompts, filesystem monitors, external diff drivers, text conversion,
-and optional index locks are disabled.
+Every mutation uses a two-step approval protocol:
 
-It does not yet provide mutation tools, a transport server, sandbox lifecycle,
-credential injection, package installation, Git publishing, or arbitrary shell
-execution. Those capabilities remain gated by the approval, sandbox, and
-credential-broker phases of the roadmap.
+1. `POST /approvals/request` records the exact action payload and digest.
+2. An explicit UI action calls `POST /approvals/approve` for that digest.
+3. The short-lived token is accepted once and only for the canonical payload
+   that was reviewed.
 
-An action digest is an integrity binding, not an authorization signature. A
-future authenticated transport must validate grants, expiry, nonce reuse, and
-policy before calling this bridge. OS-level sandboxing is still required to
-close filesystem race and process-isolation boundaries.
+Read endpoints:
+
+- `GET /health`, `GET /fs/tree`, `POST /fs/read`
+- `GET /git/status`, `POST /git/diff`
+
+Approval-gated endpoints:
+
+- `POST /fs/write`, `POST /fs/delete`
+- `POST /terminal/execute`
+- `POST /git/commit`, `POST /git/action`
+- `POST /provider/github/pull-request`
+
+Generic terminal commands are rejected on a direct host run unless
+`CONDUCTOR_ALLOW_HOST_EXECUTION=true`. Docker Compose sets
+`CONDUCTOR_EXECUTION_MODE=container`, mounts only `WORKSPACE_PATH`, runs without
+root privileges, and applies resource limits. HTTP/MCP transport is not treated
+as authorization; approval integrity and process isolation are enforced here.

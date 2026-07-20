@@ -28,6 +28,10 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(workspace, /workspaceFiles/);
   assert.match(workspace, /LOCAL_GIT_COMPANION/);
   assert.match(workspace, /git\/commit/);
+  assert.match(workspace, /fs\/tree/);
+  assert.match(workspace, /fs\/read/);
+  assert.match(workspace, /terminal\/execute/);
+  assert.match(workspace, /collectRepositoryContext/);
   assert.match(pythonRunner, /new Worker\(PYTHON_RUNNER_WORKER_URL/);
   assert.match(pythonWorker, /runPythonAsync/);
   assert.match(pythonWorker, /jsglobals: noJavaScriptGlobals/);

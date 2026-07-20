@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  normalizeMcpGatewayUrl,
   DEFAULT_AZURE_FOUNDRY_ENDPOINT,
   normalizeAzureFoundryBaseUrl,
   resolveAgentRuntimeConfig,
@@ -39,4 +40,22 @@ test("rejects a non-Azure endpoint before it can receive an Azure credential", (
 test("keeps a deterministic demo model when no server credential is configured", () => {
   const runtime = resolveAgentRuntimeConfig({});
   assert.deepEqual(runtime, { provider: "demo", model: "gpt-5.1-codex-mini" });
+});
+
+test("supports an OpenAI-compatible Docker Model Runner endpoint", () => {
+  const runtime = resolveAgentRuntimeConfig({
+    OPENAI_API_KEY: "docker-model-runner",
+    OPENAI_BASE_URL: "http://model-runner.docker.internal/engines/v1",
+    OPENAI_AGENT_MODEL: "ai/qwen2.5-coder",
+  });
+  assert.equal(runtime.provider, "openai");
+  if (runtime.provider === "openai") {
+    assert.equal(runtime.baseURL, "http://model-runner.docker.internal/engines/v1");
+    assert.equal(runtime.model, "ai/qwen2.5-coder");
+  }
+});
+
+test("accepts only HTTPS or the local Compose MCP gateway", () => {
+  assert.equal(normalizeMcpGatewayUrl("http://mcp-gateway:8811/"), "http://mcp-gateway:8811");
+  assert.throws(() => normalizeMcpGatewayUrl("http://example.com/mcp"), /MCP_GATEWAY_URL/);
 });

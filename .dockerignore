@@ -1,0 +1,14 @@
+node_modules
+dist
+.next
+.vinext
+.wrangler
+.git
+.env
+.env.*
+!.env.example
+.mcp.env
+secret.*
+work
+coverage
+npm-debug.log*

@@ -28,6 +28,7 @@ import {
   type AgentProposal,
 } from "@/lib/agent-safety";
 import {
+  normalizeMcpGatewayUrl,
   resolveAgentRuntimeConfig,
   type AgentRuntimeConfig,
 } from "@/lib/agent-provider";
@@ -43,13 +44,25 @@ async function runLiveAgent(
   workspaceFiles: NonNullable<
     ReturnType<typeof agentRequestSchema.parse>["workspaceFiles"]
   >,
+  mcpGatewayUrl?: string,
 ): Promise<AgentOutput> {
-  const { Agent, OpenAIProvider, Runner } = await import("@openai/agents");
+  const { Agent, MCPServerStreamableHttp, OpenAIProvider, Runner } = await import("@openai/agents");
   const provider = new OpenAIProvider({
     apiKey: runtime.apiKey,
-    ...(runtime.provider === "azure" ? { baseURL: runtime.baseURL } : {}),
+    ...(runtime.baseURL ? { baseURL: runtime.baseURL } : {}),
     useResponses: true,
   });
+
+  const mcpServer = mcpGatewayUrl
+    ? new MCPServerStreamableHttp({
+        url: mcpGatewayUrl,
+        name: "docker-mcp-gateway",
+        cacheToolsList: true,
+        timeout: 8_000,
+        toolFilter: async (_context, tool) => /^(get|list|read|search|fetch|inspect|view|query)_?/i.test(tool.name),
+      })
+    : undefined;
+  if (mcpServer) await mcpServer.connect();
 
   const agent = new Agent({
     name: "Conductor coding agent",
@@ -60,12 +73,15 @@ async function runLiveAgent(
       "Do not claim to run tools, change files, access secrets, or publish Git changes.",
       "Return a compact structured proposal only. Do not reveal private reasoning.",
       "Mark any local write or external side effect as R1 or higher and require approval.",
-      "For Python creation requests, you may propose up to eight relative .py file drafts in artifacts.",
-      "Set artifacts to [] for analysis-only requests. Set execution to null unless proposing a bounded run of one drafted entrypoint.",
-      "Never use absolute paths, traversal, shell command strings, or a non-Python entrypoint.",
-      "Executable Python drafts must use the standard library only. Do not propose pip, micropip, package installation, or third-party imports.",
+      "You may propose up to eight complete relative file drafts in artifacts for any programming language.",
+      "Set artifacts to [] for analysis-only requests. Set execution to null unless proposing one bounded verification command.",
+      "Never use absolute paths or traversal. Keep commands scoped to the workspace and avoid destructive system-level operations.",
+      "For execution, provide the relevant relative entrypoint, arguments, timeout, and an optional explicit command such as npm test or python3 main.py.",
+      "All writes and commands are proposals; the local execution companion will require a payload-bound human approval before acting.",
     ].join(" "),
     outputType: agentProposalSchema,
+    mcpServers: mcpServer ? [mcpServer] : [],
+    mcpConfig: { includeServerInToolNames: true, convertSchemasToStrict: true },
   });
 
   const prompt = [
@@ -76,14 +92,18 @@ async function runLiveAgent(
       : "No active task is selected.",
     formatUntrustedWorkspaceFiles(workspaceFiles),
     formatUntrustedUserRequest(message),
-    "Respond with a bounded plan for the next safe step. A draft or run is only a proposal and always requires approval.",
+    "Respond with complete file drafts and a bounded verification command when implementation is requested. A draft or run is only a proposal and always requires approval.",
   ].join("\n");
   const runner = new Runner({
     traceIncludeSensitiveData: false,
     workflowName: "conductor-planning",
   });
-  const result = await runner.run(agent, prompt, { maxTurns: 2 });
-  return agentProposalSchema.parse(result.finalOutput);
+  try {
+    const result = await runner.run(agent, prompt, { maxTurns: mcpServer ? 4 : 2 });
+    return agentProposalSchema.parse(result.finalOutput);
+  } finally {
+    await mcpServer?.close().catch(() => undefined);
+  }
 }
 
 function errorBody(error: unknown): { ok: false; error: Record<string, unknown> } {
@@ -129,7 +149,8 @@ export async function POST(request: Request) {
     ownerToken = claim.ownerToken;
 
     const context = await loadAgentContext(database, workspaceId, input.taskId);
-    const runtime = resolveAgentRuntimeConfig(getEnvironmentBindings());
+    const environmentBindings = getEnvironmentBindings();
+    const runtime = resolveAgentRuntimeConfig(environmentBindings);
     const configuredModel = runtime.model;
     let mode: "azure" | "openai" | "demo" = "demo";
     let output: AgentOutput;
@@ -142,6 +163,7 @@ export async function POST(request: Request) {
           input.message,
           context,
           input.workspaceFiles ?? [],
+          normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
         );
         mode = runtime.provider;
       } catch {

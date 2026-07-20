@@ -1,0 +1,11 @@
+services:
+  web:
+    environment:
+      AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-https://ai-environment-resource.services.ai.azure.com}
+      AZURE_AI_FOUNDRY_MODEL: ${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}
+    secrets:
+      - azure-api-key
+
+secrets:
+  azure-api-key:
+    file: ${AZURE_AI_FOUNDRY_API_KEY_FILE:-./secret.azure-api-key}

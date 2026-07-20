@@ -1,55 +1,100 @@
 # Conductor
 
-Conductor is a security-first AI engineering workspace for planning, reviewing,
-and shipping work with coding agents. This repository implements the first
-production-shaped vertical slice of the approved AI Environment System.
+Conductor is a security-first AI coding workspace where a human reviews agent
+proposals before the execution companion changes a real repository.
 
-## Included in this slice
+## Capabilities
 
-- IDE-style workspace with files, diffs, task state, agent activity, context,
-  approvals, Git review, and validation output.
-- Durable D1-backed tasks, approvals, and append-only task events.
-- Cursor-based incremental task-event synchronization for the workspace UI.
-- An OpenAI Agents SDK boundary with a deterministic demo mode when no API key
-  is configured, plus structured proposal normalization that redacts
-  sensitive-looking output and raises side-effect proposals to human approval.
-- Approval-gated Python file proposals: inspect complete `.py` drafts, approve
-  them into a device-local browser workspace, run the selected entrypoint, and
-  read stdout, stderr, exit status, and duration in the built-in Terminal.
-- A one-shot Pyodide Web Worker execution sandbox with no host filesystem,
-  disabled network bridges, standard-library-only code, strict size/output
-  ceilings, and a hard 8-second code-execution timeout.
-- Exact approval and idempotency contracts for persistent actions.
-- A local-companion foundation for workspace path validation, typed Git reads,
-  and approval-triggered local commit creation.
-- Cloudflare/Vinext deployment through OpenAI Sites.
+- OpenAI Agents SDK orchestration with Azure AI Foundry as the preferred model
+  provider and an OpenAI-compatible fallback.
+- Complete, multi-language file proposals rendered in the editor before apply.
+- Real repository filesystem tree/read/write/delete through the companion.
+- Real terminal execution with stdout, stderr, exit code, timeout, and duration.
+- Git status, diff, commit, fetch, pull, push, branch, checkout, and merge.
+- GitHub pull-request creation through the provider API.
+- Payload-bound, short-lived, single-use approval tokens for every mutation.
+- A browser-only Pyodide fallback when the execution companion is unavailable.
+- Docker Compose packaging with a shared workspace volume, health checks,
+  non-root execution, dropped Linux capabilities, and resource limits.
+- D1-backed task, approval, event, and idempotency records for the hosted UI.
 
-This is intentionally not the final autonomous system. Python files created by
-the interface live in that browser's isolated workspace; they do not mutate the
-host repository or become Git commits. Write-capable host tools, sandbox
-transport, remote Git publication, credential injection, and third-party MCP
-installation remain gated roadmap phases.
+## Run with Docker Compose
 
-## Run locally
+Copy `.env.example` to an ignored `.env`. Set `WORKSPACE_PATH` to the repository
+the agent may change and add only the credentials you need. Keys are injected at
+runtime and are not embedded in the image.
+
+```bash
+docker compose up --build
+```
+
+Provider and tool configurations follow the layered Compose pattern used by
+Docker's Compose for Agents examples. Use one override at a time:
+
+```bash
+# Azure AI Foundry key from ./secret.azure-api-key
+docker compose -f compose.yaml -f compose.azure.yaml up --build
+
+# OpenAI key from ./secret.openai-api-key
+docker compose -f compose.yaml -f compose.openai.yaml up --build
+
+# Docker Model Runner (requires Docker Desktop/Engine model support)
+docker compose -f compose.yaml -f compose.model.yaml up --build
+
+# Add Docker MCP Gateway and GitHub Official MCP tools
+docker compose -f compose.yaml -f compose.azure.yaml -f compose.mcp.yaml up --build
+
+# Add GitHub push and pull-request credentials to the companion
+docker compose -f compose.yaml -f compose.azure.yaml -f compose.github.yaml up --build
+```
+
+The MCP gateway is optional. The Agents SDK filters its tool catalog to
+read/list/search/fetch/query operations. Repository writes, shell commands,
+remote Git publication, and pull requests stay behind Conductor's one-time
+approval flow.
+
+Open `http://localhost:3000`. Check the execution companion with:
+
+```bash
+curl http://127.0.0.1:8765/health
+```
+
+The mounted repository remains on the host. Terminal and Git commands execute
+inside the companion container, not directly on the host operating system.
+
+## Share the image
+
+```bash
+docker build -t your-registry/conductor:1.0 .
+docker push your-registry/conductor:1.0
+```
+
+Recipients set `CONDUCTOR_IMAGE=your-registry/conductor:1.0`, configure their
+own `WORKSPACE_PATH` and secrets, then run `docker compose up`.
+
+## Local development
 
 ```bash
 npm install
 npm run dev
 ```
 
-To let the Git review panel talk to the real local repository, keep this bridge
-running in a second terminal from the same repository:
+Keep the execution companion running in a second terminal:
 
 ```bash
 npm run companion:git
 ```
 
-When the bridge is running, the UI reads real `git status` and `git diff` data,
-then the reviewed commit button creates a local `git add` plus `git commit` for
-the selected repository files. Push remains deliberately unavailable from the
-browser UI.
+Host development exposes filesystem and Git capabilities. Generic terminal
+execution is disabled on the host by default. Opt in only when intended:
 
-The application runs in demo-agent mode by default. To enable the preferred Azure AI Foundry agent, set these server-side values (the key must never be placed in client code):
+```bash
+CONDUCTOR_ALLOW_HOST_EXECUTION=true npm run companion:git
+```
+
+Docker Compose sets the safer container execution mode automatically.
+
+## Provider configuration
 
 ```bash
 AZURE_AI_FOUNDRY_ENDPOINT=https://ai-environment-resource.services.ai.azure.com
@@ -57,25 +102,27 @@ AZURE_AI_FOUNDRY_API_KEY=replace-with-your-key
 AZURE_AI_FOUNDRY_MODEL=gpt-5.1-codex-mini
 ```
 
-Conductor normalizes the endpoint to Azure Foundry's OpenAI-compatible `/openai/v1` route and records each successful run as `azure`. It retains the deterministic demo response if the key is absent or the configured provider is unavailable. `OPENAI_API_KEY` remains an optional legacy fallback and is used only when the Azure key is absent.
+`OPENAI_API_KEY` and `OPENAI_MODEL` remain optional fallbacks. `GITHUB_TOKEN`
+enables GitHub HTTPS authentication and pull-request creation. Never commit
+credential values.
 
-Copy `.env.example` to an ignored local environment file and provide the Azure
-API key (or the optional fallback key). Never commit credentials.
+For Docker secrets, copy the matching `.example` file without the `.example`
+suffix and replace its single line with the key. Docker mounts it under
+`/run/secrets`; the entrypoint loads it only into the relevant service process.
 
-## Try the Coding Agent
+## Try it
 
-Enter this in the prompt box at the bottom of the workspace:
+Enter a task in the prompt box, for example:
 
 ```text
 สร้างไฟล์ hello.py ให้พิมพ์ Hello from Python แล้วรันและแสดงผลลัพธ์
 ```
 
-Conductor shows the complete draft before doing anything. Select a proposed
-file to inspect it, then choose **Approve, create & run**. The first run loads
-the browser Python runtime; subsequent output appears in **Terminal**. Use
-**Run again** to execute the approved browser-workspace files again. A later
-prompt can name an existing `.py` file to revise it because approved files are
-sent back to the agent as bounded, untrusted workspace context.
+Inspect the complete proposal and select **Approve, create & run**. With the
+companion connected, the files are written into the mounted repository and the
+verification command runs in the container. The Terminal also accepts explicit
+commands such as `npm test`, `python3 main.py`, `git pull`, and `git push`; every
+run requires a new approval bound to that exact command.
 
 ## Verification
 
@@ -83,27 +130,23 @@ sent back to the agent as bounded, untrusted workspace context.
 npm run typecheck
 npm run lint
 npm test
+docker compose config
+docker compose build
 ```
 
-`npm test` performs a deployment build before checking the rendered product
-surface.
+## Security boundary
 
-## Security posture
+- Model output is a proposal, never authorization.
+- The browser never receives model-provider credentials.
+- Writes, deletes, terminal commands, commits, remote Git operations, and pull
+  requests consume an exact-payload, single-use approval token.
+- Workspace paths reject absolute paths and traversal.
+- Generic shell commands run only in container mode unless a host operator
+  explicitly opts in.
+- The companion container runs as a non-root user, drops all Linux capabilities,
+  applies process/memory/CPU ceilings, and mounts only the selected workspace.
+- Git credential prompts are disabled so unattended authentication fails closed.
+- Hidden chain-of-thought is neither requested nor persisted.
 
-- Model output is treated as a proposal, never authorization.
-- The browser never receives model or provider credentials.
-- Python drafts require an explicit review-and-approve action before they are
-  saved or executed.
-- Each Python execution gets a fresh one-shot Web Worker and in-memory
-  filesystem. Network/host-storage bridges and package installation are
-  disabled, and the worker is terminated after success, failure, or timeout.
-- Approval decisions are bound to task state and idempotency keys.
-- Repository approval records do not execute arbitrary host commands. The
-  optional local Git companion exposes bounded status, diff, and commit
-  endpoints only; push is not exposed.
-- Repository and tool content is treated as untrusted evidence.
-- The companion foundation has no generic-shell capability.
-- Hidden chain-of-thought is not requested or persisted.
-
-See [`companion/README.md`](companion/README.md) for the local execution-plane
-boundary once that optional component is enabled.
+See [`companion/README.md`](companion/README.md) for the endpoint and approval
+protocol boundary.

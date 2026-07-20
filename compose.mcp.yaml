@@ -1,0 +1,24 @@
+services:
+  web:
+    environment:
+      MCP_GATEWAY_URL: http://mcp-gateway:8811
+    depends_on:
+      mcp-gateway:
+        condition: service_started
+
+  mcp-gateway:
+    image: docker/mcp-gateway:latest
+    use_api_socket: true
+    command:
+      - --transport=streaming
+      - --secrets=docker-desktop:/run/secrets/mcp_secret
+      - --servers=github-official
+    secrets:
+      - mcp_secret
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  mcp_secret:
+    file: ${MCP_SECRET_FILE:-./.mcp.env}

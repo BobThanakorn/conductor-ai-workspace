@@ -70,14 +70,24 @@ test("raises Python drafts and execution proposals to R1 with approval", () => {
   assert.equal(assessment.normalized, true);
 });
 
-test("strictly rejects absolute, traversal, Windows, and non-Python paths", () => {
-  for (const path of ["/tmp/main.py", "../main.py", "src/../main.py", "C:\\temp\\main.py", "main.js"]) {
+test("strictly rejects absolute, traversal, and Windows paths", () => {
+  for (const path of ["/tmp/main.py", "../main.py", "src/../main.py", "C:\\temp\\main.py"]) {
     assert.throws(() =>
       agentProposalSchema.parse({
         ...readOnlyProposal,
         artifacts: [{ path, content: "print('unsafe')\n", language: "python" }],
       }), path);
   }
+});
+
+test("accepts complete drafts for multiple programming languages", () => {
+  const proposal = agentProposalSchema.parse({
+    ...readOnlyProposal,
+    artifacts: [{ path: "src/main.ts", content: "console.log('ready')\n", language: "typescript" }],
+    execution: { entrypoint: "src/main.ts", command: "npm test", args: [], timeoutMs: 30_000 },
+  });
+  assert.equal(proposal.artifacts[0]?.language, "typescript");
+  assert.equal(proposal.execution?.command, "npm test");
 });
 
 test("requires execution to target a proposed artifact and bounds runtime fields", () => {
@@ -91,7 +101,7 @@ test("requires execution to target a proposed artifact and bounds runtime fields
     agentProposalSchema.parse({
       ...readOnlyProposal,
       artifacts: [{ path: "main.py", content: "print('ok')\n", language: "python" }],
-      execution: { entrypoint: "main.py", args: [], timeoutMs: 8_001 },
+      execution: { entrypoint: "main.py", args: [], timeoutMs: 300_001 },
     }));
 });
 

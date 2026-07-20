@@ -7,8 +7,10 @@ export type AgentEnvironmentBindings = {
   AZURE_AI_FOUNDRY_ENDPOINT?: string;
   AZURE_AI_FOUNDRY_MODEL?: string;
   OPENAI_API_KEY?: string;
+  OPENAI_BASE_URL?: string;
   OPENAI_AGENT_MODEL?: string;
   OPENAI_MODEL?: string;
+  MCP_GATEWAY_URL?: string;
 };
 
 export type AgentRuntimeConfig =
@@ -21,6 +23,7 @@ export type AgentRuntimeConfig =
   | {
       provider: "openai";
       apiKey: string;
+      baseURL?: string;
       model: string;
     }
   | {
@@ -65,9 +68,25 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
 
   const openAIKey = configured(bindings.OPENAI_API_KEY);
   if (openAIKey) {
+    const configuredBaseUrl = configured(bindings.OPENAI_BASE_URL);
+    let baseURL: string | undefined;
+    if (configuredBaseUrl) {
+      const url = new URL(configuredBaseUrl);
+      const localHttp = url.protocol === "http:" && (
+        url.hostname === "localhost" ||
+        url.hostname === "127.0.0.1" ||
+        url.hostname.endsWith(".docker.internal") ||
+        url.hostname === "model-runner"
+      );
+      if ((!localHttp && url.protocol !== "https:") || url.username || url.password || url.hash) {
+        throw new Error("OPENAI_BASE_URL must use HTTPS or a trusted local Docker Model Runner host.");
+      }
+      baseURL = url.toString().replace(/\/$/, "");
+    }
     return {
       provider: "openai",
       apiKey: openAIKey,
+      ...(baseURL ? { baseURL } : {}),
       model:
         configured(bindings.OPENAI_AGENT_MODEL) ??
         configured(bindings.OPENAI_MODEL) ??
@@ -83,4 +102,15 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
       configured(bindings.OPENAI_MODEL) ??
       DEFAULT_AZURE_FOUNDRY_MODEL,
   };
+}
+
+export function normalizeMcpGatewayUrl(value: string | undefined): string | undefined {
+  const configuredValue = configured(value);
+  if (!configuredValue) return undefined;
+  const url = new URL(configuredValue);
+  const trustedLocal = url.protocol === "http:" && ["mcp-gateway", "localhost", "127.0.0.1"].includes(url.hostname);
+  if ((!trustedLocal && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) {
+    throw new Error("MCP_GATEWAY_URL must use HTTPS or the local Compose MCP gateway hostname.");
+  }
+  return url.toString().replace(/\/$/, "");
 }

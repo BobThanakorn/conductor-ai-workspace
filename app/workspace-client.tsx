@@ -93,11 +93,26 @@ type LocalGitStatus = {
   raw?: string;
 };
 
+type LocalFsEntry = {
+  path: string;
+  name: string;
+  type: "directory" | "file";
+  children?: LocalFsEntry[];
+};
+
 type LocalGitCommit = {
   ok?: boolean;
   head?: string;
   stdout?: string;
   stderr?: string;
+  error?: string;
+};
+
+type CompanionApproval = {
+  ok?: boolean;
+  approvalId?: string;
+  digest?: string;
+  token?: string;
   error?: string;
 };
 
@@ -126,11 +141,12 @@ type WorkspaceApproval = {
 type GeneratedPythonFile = {
   path: string;
   content: string;
-  language: "python";
+  language: string;
 };
 
 type PythonExecutionRequest = {
   entrypoint: string;
+  command?: string;
   args?: string[];
   timeoutMs?: number;
 };
@@ -546,11 +562,10 @@ function normalizePythonFiles(value: unknown): GeneratedPythonFile[] {
   for (const candidate of value) {
     if (!candidate || typeof candidate !== "object") return [];
     const record = candidate as Record<string, unknown>;
-    if (record.language !== "python" || typeof record.path !== "string" || typeof record.content !== "string") return [];
+    if (typeof record.language !== "string" || !record.language || typeof record.path !== "string" || typeof record.content !== "string") return [];
     const path = record.path.trim();
     const segments = path.split("/");
     if (
-      !path.endsWith(".py") ||
       path.length > 200 ||
       path.includes("\0") ||
       path.startsWith("/") ||
@@ -562,7 +577,7 @@ function normalizePythonFiles(value: unknown): GeneratedPythonFile[] {
     if (contentBytes > 32_000) return [];
     totalBytes += contentBytes;
     if (totalBytes > 120_000) return [];
-    files.set(path, { path, content: record.content, language: "python" });
+    files.set(path, { path, content: record.content, language: record.language.slice(0, 32) });
   }
   return Array.from(files.values());
 }
@@ -613,7 +628,7 @@ function mergeGeneratedTree(tree: FileTreeNode[], files: GeneratedPythonFile[]):
   if (!generated.length) return mergedTree;
   return [
     ...mergedTree,
-    { id: "__generated_python__", name: "Browser Python", type: "directory", children: generated },
+    { id: "__generated_python__", name: "Generated files", type: "directory", children: generated },
   ];
 }
 
@@ -648,6 +663,32 @@ function localGitTree(files: LocalGitFile[]): FileTreeNode[] {
     children.push({ id: file.path, name, type: "file", status: code });
   }
   return root.length ? root : INITIAL_FILE_TREE;
+}
+
+function localFsTree(entries: LocalFsEntry[], changed: LocalGitFile[]): FileTreeNode[] {
+  const statuses = new Map(changed.map((file) => [file.path, file.code]));
+  const convert = (entry: LocalFsEntry): FileTreeNode => {
+    const code = statuses.get(entry.path) ?? "";
+    const status = code.includes("?")
+      ? "added"
+      : code.includes("D")
+        ? "deleted"
+        : code.trim()
+          ? "modified"
+          : undefined;
+    return {
+      id: entry.path,
+      name: entry.name,
+      type: entry.type,
+      ...(status ? { status } : {}),
+      ...(entry.type === "directory" ? { children: (entry.children ?? []).map(convert) } : {}),
+    };
+  };
+  return entries.map(convert);
+}
+
+function flattenFileTree(nodes: FileTreeNode[]): string[] {
+  return nodes.flatMap((node) => node.type === "file" ? [node.id] : flattenFileTree(node.children ?? []));
 }
 
 function diffFromUnifiedText(file: string, text: string): WorkspaceDiff {
@@ -758,6 +799,8 @@ export default function WorkspaceClient() {
   const [approvedPythonRun, setApprovedPythonRun] = useState<ApprovedPythonRun | null>(null);
   const [executionResult, setExecutionResult] = useState<PythonExecutionResult | null>(null);
   const [executionState, setExecutionState] = useState<"idle" | "running" | "complete" | "failed">("idle");
+  const [terminalCommand, setTerminalCommand] = useState("");
+  const [repositoryFileContents, setRepositoryFileContents] = useState<Record<string, string>>({});
   const [localGitConnected, setLocalGitConnected] = useState(false);
   const [acceptedFiles, setAcceptedFiles] = useState(() =>
     new Set(collectChangedFiles(INITIAL_FILE_TREE).map((file) => file.id)),
@@ -765,12 +808,18 @@ export default function WorkspaceClient() {
 
   const refreshLocalGit = useCallback(async (silent = true) => {
     try {
-      const response = await fetch(`${LOCAL_GIT_COMPANION}/git/status`, { cache: "no-store" });
+      const [response, treeResponse] = await Promise.all([
+        fetch(`${LOCAL_GIT_COMPANION}/git/status`, { cache: "no-store" }),
+        fetch(`${LOCAL_GIT_COMPANION}/fs/tree?depth=6`, { cache: "no-store" }),
+      ]);
       if (!response.ok) throw new Error("Local Git companion unavailable");
       const data = (await response.json()) as LocalGitStatus;
       if (!data.ok) throw new Error("Local Git companion returned an error");
       const files = data.files ?? [];
-      const nextTree = localGitTree(files);
+      const treeData = treeResponse.ok
+        ? await treeResponse.json() as { entries?: LocalFsEntry[] }
+        : undefined;
+      const nextTree = treeData?.entries?.length ? localFsTree(treeData.entries, files) : localGitTree(files);
       const nextChanged = collectChangedFiles(nextTree);
       setLocalGitConnected(true);
       setApiState("connected");
@@ -1006,6 +1055,9 @@ export default function WorkspaceClient() {
   const currentCode = useMemo(() => {
     if (selectedDraftFile) return selectedDraftFile.content.split(/\r?\n/);
     if (selectedPythonFile) return selectedPythonFile.content.split(/\r?\n/);
+    if (repositoryFileContents[activeFile] !== undefined) {
+      return repositoryFileContents[activeFile].split(/\r?\n/);
+    }
     if (serverDiff?.file === activeFile) {
       return serverDiff.hunks.flatMap((hunk) =>
         hunk.lines.filter((line) => line.type !== "removed").map((line) => line.content),
@@ -1016,7 +1068,7 @@ export default function WorkspaceClient() {
       "",
       "// Source contents are not included in the current workspace snapshot.",
     ];
-  }, [activeFile, selectedDraftFile, selectedPythonFile, serverDiff]);
+  }, [activeFile, repositoryFileContents, selectedDraftFile, selectedPythonFile, serverDiff]);
   const changedFiles = useMemo(() => collectChangedFiles(displayFileTree), [displayFileTree]);
   const editorFiles = useMemo(() => {
     const activeVirtual: FileTreeNode | null = selectedDraftFile
@@ -1047,7 +1099,7 @@ export default function WorkspaceClient() {
   const proposalArgs = normalizePythonArgs(pendingProposal?.execution?.args);
   const requestedTimeoutMs = pendingProposal?.execution?.timeoutMs;
   const proposalTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs)
-    ? Math.min(8_000, Math.max(100, Math.round(requestedTimeoutMs)))
+    ? Math.min(300_000, Math.max(100, Math.round(requestedTimeoutMs)))
     : 5_000;
 
   function showNotice(message: string) {
@@ -1068,13 +1120,26 @@ export default function WorkspaceClient() {
     setActiveFile(path);
     setSelectedGeneratedFile(localPythonFiles.some((file) => file.path === path) ? path : null);
     setExplorerOpen(false);
-    if (localGitConnected && !path.endsWith(".py")) {
+    if (localGitConnected) {
       try {
-        const response = await fetch(`${LOCAL_GIT_COMPANION}/git/diff`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paths: [path] }),
-        });
+        const [response, readResponse] = await Promise.all([
+          fetch(`${LOCAL_GIT_COMPANION}/git/diff`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ paths: [path] }),
+          }),
+          fetch(`${LOCAL_GIT_COMPANION}/fs/read`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
+          }),
+        ]);
+        if (readResponse.ok) {
+          const data = await readResponse.json() as { content?: string };
+          if (typeof data.content === "string") {
+            setRepositoryFileContents((current) => ({ ...current, [path]: data.content as string }));
+          }
+        }
         if (response.ok) {
           const data = (await response.json()) as { stdout?: string };
           setServerDiff(diffFromUnifiedText(path, data.stdout ?? ""));
@@ -1083,6 +1148,48 @@ export default function WorkspaceClient() {
         setLocalGitConnected(false);
       }
     }
+  }
+
+  async function collectRepositoryContext(message: string) {
+    if (!localGitConnected) return localPythonFiles.map(({ path, content }) => ({ path, content }));
+    const textExtensions = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|kts|cs|cpp|c|h|hpp|rb|php|swift|sql|md|json|ya?ml|toml|ini|css|scss|html|sh|ps1)$/i;
+    const normalizedMessage = message.toLowerCase();
+    const changed = new Set(collectChangedFiles(fileTree).map((file) => file.id));
+    const candidates = flattenFileTree(fileTree)
+      .filter((path) => textExtensions.test(path))
+      .map((path) => ({
+        path,
+        score:
+          (path === activeFile ? 100 : 0) +
+          (changed.has(path) ? 40 : 0) +
+          (normalizedMessage.includes(path.toLowerCase()) ? 80 : 0) +
+          (normalizedMessage.includes(path.split("/").at(-1)?.toLowerCase() ?? "") ? 30 : 0),
+      }))
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .slice(0, 8);
+    const snapshots = await Promise.all(candidates.map(async ({ path }) => {
+      try {
+        const response = await fetch(`${LOCAL_GIT_COMPANION}/fs/read`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        if (!response.ok) return null;
+        const data = await response.json() as { content?: string };
+        if (typeof data.content !== "string" || !data.content) return null;
+        return { path, content: data.content.slice(0, 32_000) };
+      } catch {
+        return null;
+      }
+    }));
+    let total = 0;
+    return snapshots.filter((snapshot): snapshot is { path: string; content: string } => {
+      if (!snapshot) return false;
+      const bytes = new TextEncoder().encode(snapshot.content).byteLength;
+      if (total + bytes > 120_000) return false;
+      total += bytes;
+      return true;
+    });
   }
 
   function toggleAcceptedFile(path: string) {
@@ -1159,25 +1266,83 @@ export default function WorkspaceClient() {
     showNotice("Validation is a proposed R1 action and requires a fresh approval request");
   }
 
+  async function getCompanionApproval(action: string, input: Record<string, unknown>) {
+    const requestResponse = await fetch(`${LOCAL_GIT_COMPANION}/approvals/request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, input }),
+    });
+    const requestData = (await requestResponse.json()) as CompanionApproval;
+    if (!requestResponse.ok || !requestData.approvalId || !requestData.digest) {
+      throw new Error(requestData.error || "The companion could not create an approval request.");
+    }
+    const approvalResponse = await fetch(`${LOCAL_GIT_COMPANION}/approvals/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        approvalId: requestData.approvalId,
+        digest: requestData.digest,
+        confirm: true,
+      }),
+    });
+    const approvalData = (await approvalResponse.json()) as CompanionApproval;
+    if (!approvalResponse.ok || !approvalData.token) {
+      throw new Error(approvalData.error || "The companion did not issue an approval token.");
+    }
+    return approvalData.token;
+  }
+
+  async function executeTerminalCommand() {
+    const command = terminalCommand.trim();
+    if (!command || busyAction) return;
+    setBusyAction("terminal");
+    setBottomPanel("terminal");
+    const input = { command, cwd: ".", timeoutMs: 120_000 };
+    setTerminalLines([{ type: "muted", text: `$ ${command}` }, { type: "running", text: " ◌ awaiting one-time approval and execution…" }]);
+    try {
+      const token = await getCompanionApproval("terminal.execute", input);
+      const response = await fetch(`${LOCAL_GIT_COMPANION}/terminal/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Conductor-Approval": token },
+        body: JSON.stringify(input),
+      });
+      const data = (await response.json()) as PythonExecutionResult & { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Command execution failed.");
+      setTerminalLines([
+        { type: "muted", text: `$ ${command}` },
+        ...data.stdout.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "output", text })),
+        ...data.stderr.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "error", text })),
+        { type: data.exitCode === 0 ? "complete" : "error", text: ` Process exited with status ${data.exitCode ?? "unknown"} · ${data.durationMs ?? 0}ms` },
+      ]);
+      setTerminalCommand("");
+      await refreshLocalGit(true);
+    } catch (error) {
+      setTerminalLines((current) => [...current.slice(0, 1), { type: "error", text: ` ${error instanceof Error ? error.message : "Command failed"}` }]);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function createCommit() {
     if (!acceptedFiles.size) return;
     setBusyAction("create_commit");
     setBottomPanel("terminal");
-    const paths = Array.from(acceptedFiles).filter((path) => !path.endsWith(".py"));
+    const paths = Array.from(acceptedFiles);
     if (!paths.length) {
-      showNotice("Browser Python files are not in the host Git repo yet");
+      showNotice("Select at least one repository file first");
       setBusyAction(null);
       return;
     }
     try {
+      const input = {
+        paths,
+        message: `chore: apply reviewed workspace changes`,
+      };
+      const token = await getCompanionApproval("git.commit", input);
       const response = await fetch(`${LOCAL_GIT_COMPANION}/git/commit`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirm: true,
-          paths,
-          message: `chore: apply reviewed workspace changes`,
-        }),
+        headers: { "Content-Type": "application/json", "X-Conductor-Approval": token },
+        body: JSON.stringify(input),
       });
       const data = (await response.json()) as LocalGitCommit;
       if (!response.ok || !data.ok) throw new Error(data.error || "Commit failed");
@@ -1296,6 +1461,56 @@ export default function WorkspaceClient() {
       args: proposalArgs ?? [],
       timeoutMs: proposalTimeoutMs,
     };
+    if (localGitConnected) {
+      setExecutionState("running");
+      setBottomPanel("terminal");
+      try {
+        const writeInput = { files: files.map(({ path, content }) => ({ path, content })) };
+        const writeToken = await getCompanionApproval("fs.write", writeInput);
+        const writeResponse = await fetch(`${LOCAL_GIT_COMPANION}/fs/write`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Conductor-Approval": writeToken },
+          body: JSON.stringify(writeInput),
+        });
+        const writeData = (await writeResponse.json()) as { ok?: boolean; error?: string };
+        if (!writeResponse.ok || !writeData.ok) throw new Error(writeData.error || "Writing repository files failed.");
+
+        const quotedArgs = (execution.args ?? []).map((argument) => JSON.stringify(argument)).join(" ");
+        const command = execution.command?.trim() || `python3 ${JSON.stringify(execution.entrypoint)}${quotedArgs ? ` ${quotedArgs}` : ""}`;
+        const executeInput = { command, cwd: ".", timeoutMs: execution.timeoutMs ?? 5_000 };
+        const executeToken = await getCompanionApproval("terminal.execute", executeInput);
+        const executeResponse = await fetch(`${LOCAL_GIT_COMPANION}/terminal/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Conductor-Approval": executeToken },
+          body: JSON.stringify(executeInput),
+        });
+        const result = (await executeResponse.json()) as PythonExecutionResult & { ok?: boolean; error?: string };
+        if (!executeResponse.ok || !result.ok) throw new Error(result.error || "Python execution failed.");
+        setExecutionResult(result);
+        setExecutionState(result.exitCode === 0 ? "complete" : "failed");
+        setTerminalLines([
+          { type: "muted", text: `$ ${command}` },
+          ...result.stdout.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "output", text })),
+          ...result.stderr.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "error", text })),
+          { type: result.exitCode === 0 ? "complete" : "error", text: ` Process exited with status ${result.exitCode ?? "unknown"} · ${result.durationMs ?? 0}ms` },
+        ]);
+        setPendingProposal(null);
+        setInspectorOpen(false);
+        await refreshLocalGit(true);
+        showNotice(`${files.length} repository file${files.length === 1 ? "" : "s"} created and executed`);
+        return;
+      } catch (error) {
+        setExecutionState("failed");
+        setTerminalLines((current) => [...current.slice(-4), { type: "error", text: ` ${error instanceof Error ? error.message : "Repository execution failed"}` }]);
+        showNotice("Repository execution failed; proposal remains available for review");
+        return;
+      }
+    }
+
+    if (files.some((file) => file.language !== "python" || !file.path.endsWith(".py"))) {
+      showNotice("A running execution companion is required to apply non-Python files");
+      return;
+    }
     const mergedFiles = new Map(localPythonFiles.map((file) => [file.path, file]));
     files.forEach((file) => mergedFiles.set(file.path, file));
     const browserWorkspaceFiles = normalizePythonFiles(Array.from(mergedFiles.values()));
@@ -1371,6 +1586,7 @@ export default function WorkspaceClient() {
     ]);
 
     try {
+      const workspaceContextFiles = await collectRepositoryContext(message);
       const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1378,7 +1594,7 @@ export default function WorkspaceClient() {
           message,
           taskId: workspace.taskId,
           workspaceId: workspace.id,
-          workspaceFiles: localPythonFiles.map(({ path, content }) => ({ path, content })),
+          workspaceFiles: workspaceContextFiles,
           idempotencyKey: `agent-${Date.now()}`,
         }),
       });
@@ -1717,7 +1933,7 @@ export default function WorkspaceClient() {
                         {executionState === "running" ? "Running…" : "Run again"}
                       </button>
                     )}
-                    <span className="terminal-sandbox"><i aria-hidden="true" /> Python sandbox</span>
+                    <span className="terminal-sandbox"><i aria-hidden="true" /> {localGitConnected ? "Container workspace" : "Python sandbox"}</span>
                   </div>
                 </div>
                 <div className="terminal-lines">
@@ -1725,6 +1941,25 @@ export default function WorkspaceClient() {
                     <div className={`terminal-line ${line.type}`} key={`${index}-${line.text}`}>{line.text || " "}</div>
                   ))}
                 </div>
+                <form
+                  className="terminal-input-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void executeTerminalCommand();
+                  }}
+                >
+                  <span aria-hidden="true">$</span>
+                  <input
+                    value={terminalCommand}
+                    onChange={(event) => setTerminalCommand(event.target.value)}
+                    placeholder={localGitConnected ? "npm test, python3 main.py, git push…" : "Start the execution companion to enable terminal commands"}
+                    aria-label="Terminal command"
+                    disabled={!localGitConnected || busyAction === "terminal"}
+                  />
+                  <button type="submit" disabled={!localGitConnected || !terminalCommand.trim() || busyAction === "terminal"}>
+                    {busyAction === "terminal" ? "Running…" : "Approve & run"}
+                  </button>
+                </form>
               </div>
 
               <aside className="git-review" aria-label="Git change review" data-testid="git-review">
@@ -1830,10 +2065,10 @@ export default function WorkspaceClient() {
               data-testid="python-proposal-review"
             >
               <div className="proposal-heading">
-                <span className="python-mark" aria-hidden="true">PY</span>
+                <span className="python-mark" aria-hidden="true">AI</span>
                 <div>
                   <span className="eyebrow">Coding agent proposal</span>
-                  <h2 id="python-proposal-title">Review before creating files</h2>
+                  <h2 id="python-proposal-title">Review before applying files</h2>
                 </div>
                 <span className="risk-pill">{pendingProposal.riskLevel ?? "R1"} · local</span>
               </div>
@@ -1870,7 +2105,7 @@ export default function WorkspaceClient() {
                         }}
                         aria-pressed={selectedGeneratedFile === file.path}
                       >
-                        <span className="proposal-file-icon">PY</span>
+                        <span className="proposal-file-icon">{file.language.slice(0, 3).toUpperCase()}</span>
                         <span>{file.path}</span>
                         <b>{file.content.split(/\r?\n/).length} lines</b>
                       </button>
@@ -1878,11 +2113,11 @@ export default function WorkspaceClient() {
                   ))}
                 </ul>
               ) : (
-                <div className="proposal-empty">No valid, relative <code>.py</code> artifacts were included.</div>
+                <div className="proposal-empty">No valid relative file artifacts were included.</div>
               )}
 
               <dl className="proposal-execution">
-                <div><dt>Entrypoint</dt><dd className={proposalEntrypoint ? "" : "invalid"}>{proposalEntrypoint || "Invalid or missing"}</dd></div>
+                <div><dt>Execution</dt><dd className={proposalEntrypoint ? "" : "invalid"}>{pendingProposal.execution?.command || proposalEntrypoint || "Invalid or missing"}</dd></div>
                 <div><dt>Timeout</dt><dd>{proposalTimeoutMs} ms</dd></div>
                 <div><dt>Arguments</dt><dd className={proposalArgs === null ? "invalid" : ""}>{proposalArgs === null ? "Invalid limits" : `${proposalArgs.length} supplied`}</dd></div>
               </dl>

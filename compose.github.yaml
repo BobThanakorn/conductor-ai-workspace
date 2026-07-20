@@ -1,0 +1,8 @@
+services:
+  companion:
+    secrets:
+      - github-token
+
+secrets:
+  github-token:
+    file: ${GITHUB_TOKEN_FILE:-./secret.github-token}

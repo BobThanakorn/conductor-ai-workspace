@@ -5,19 +5,19 @@ export const MAX_ARTIFACT_CONTENT_CHARS = 32_000;
 export const MAX_ARTIFACT_CONTENT_BYTES = 32_000;
 export const MAX_TOTAL_ARTIFACT_CONTENT_BYTES = 120_000;
 export const MAX_EXECUTION_ARGS = 16;
-export const MAX_EXECUTION_TIMEOUT_MS = 8_000;
+export const MAX_EXECUTION_TIMEOUT_MS = 300_000;
 
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function isSafePythonPath(path: string): boolean {
+function isSafeArtifactPath(path: string): boolean {
   if (
     path.startsWith("/") ||
     path.startsWith("\\") ||
     /^[A-Za-z]:/.test(path) ||
     path.includes("\\") ||
-    !path.endsWith(".py")
+    path.endsWith("/")
   ) {
     return false;
   }
@@ -32,12 +32,12 @@ function isSafePythonPath(path: string): boolean {
   );
 }
 
-const safePythonPathSchema = z
+const safeArtifactPathSchema = z
   .string()
   .min(3)
   .max(200)
-  .refine(isSafePythonPath, {
-    message: "path must be a relative, traversal-free .py path",
+  .refine(isSafeArtifactPath, {
+    message: "path must be relative and traversal-free",
   });
 
 const pythonContentSchema = z
@@ -50,15 +50,15 @@ const pythonContentSchema = z
 
 export const pythonArtifactSchema = z
   .object({
-    path: safePythonPathSchema,
+    path: safeArtifactPathSchema,
     content: pythonContentSchema,
-    language: z.literal("python"),
+    language: z.string().min(1).max(32),
   })
   .strict();
 
 export const pythonWorkspaceFileSchema = z
   .object({
-    path: safePythonPathSchema,
+    path: safeArtifactPathSchema,
     content: pythonContentSchema,
   })
   .strict();
@@ -103,11 +103,12 @@ export const pythonExecutionSchema = z
   .object({
     entrypoint: z
       .string()
-      .min(3)
+      .min(1)
       .max(200)
-      .refine(isSafePythonPath, {
-        message: "entrypoint must be a relative, traversal-free .py path",
+      .refine(isSafeArtifactPath, {
+        message: "entrypoint must be relative and traversal-free",
       }),
+    command: z.string().max(4_000).optional(),
     args: z.array(executionArgumentSchema).max(MAX_EXECUTION_ARGS),
     timeoutMs: z.number().int().min(100).max(MAX_EXECUTION_TIMEOUT_MS),
   })
@@ -159,11 +160,11 @@ export const agentProposalSchema = z
         message: `combined artifact content cannot exceed ${MAX_TOTAL_ARTIFACT_CONTENT_BYTES} UTF-8 bytes`,
       });
     }
-    if (proposal.execution && !paths.has(proposal.execution.entrypoint)) {
+    if (proposal.execution && !paths.has(proposal.execution.entrypoint) && !proposal.execution.command) {
       context.addIssue({
         code: "custom",
         path: ["execution", "entrypoint"],
-        message: "execution entrypoint must match one proposed artifact",
+        message: "execution entrypoint must match one proposed artifact unless an explicit command is supplied",
       });
     }
   });
@@ -334,8 +335,8 @@ export function assessAgentProposal(value: unknown): ProposalAssessment {
   const sensitiveText = [
     ...narrativeText,
     ...proposal.artifacts.flatMap((artifact) => [artifact.path, artifact.content]),
-    ...(proposal.execution
-      ? [proposal.execution.entrypoint, ...proposal.execution.args]
+        ...(proposal.execution
+      ? [proposal.execution.entrypoint, proposal.execution.command ?? "", ...proposal.execution.args]
       : []),
   ];
   const reasons: string[] = [];

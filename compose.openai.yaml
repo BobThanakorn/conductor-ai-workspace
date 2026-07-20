@@ -1,0 +1,10 @@
+services:
+  web:
+    environment:
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+    secrets:
+      - openai-api-key
+
+secrets:
+  openai-api-key:
+    file: ${OPENAI_API_KEY_FILE:-./secret.openai-api-key}

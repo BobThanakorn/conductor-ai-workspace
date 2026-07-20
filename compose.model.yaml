@@ -1,0 +1,13 @@
+services:
+  web:
+    environment:
+      OPENAI_API_KEY: docker-model-runner
+    models:
+      coding-model:
+        endpoint_var: OPENAI_BASE_URL
+        model_var: OPENAI_AGENT_MODEL
+
+models:
+  coding-model:
+    model: ${DOCKER_CODING_MODEL:-ai/qwen2.5-coder:7B-Q4_K_M}
+    context_size: 24000
