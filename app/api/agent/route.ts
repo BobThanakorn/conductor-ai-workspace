@@ -78,9 +78,15 @@ async function runLiveAgent(
       "Set artifacts to [] for analysis-only requests. Set execution to null unless proposing one bounded verification command.",
       "Never use absolute paths or traversal. Keep commands scoped to the workspace and avoid destructive system-level operations.",
       "For execution, provide the relevant relative entrypoint, arguments, timeout, and an optional explicit command such as npm test or python3 main.py.",
+      "The execution entrypoint must exactly match one proposed artifact path. Never use an interpreter name as the entrypoint.",
+      "An explicit command must be complete and non-interactive; never return only python, python3, node, npm, npx, or a shell name.",
       "All writes and commands are proposals; the local execution companion will require a payload-bound human approval before acting.",
     ].join(" "),
     outputType: agentProposalSchema,
+    modelSettings: {
+      maxTokens: 16_000,
+      store: false,
+    },
     mcpServers: mcpServer ? [mcpServer] : [],
     mcpConfig: { includeServerInToolNames: true, convertSchemasToStrict: true },
   });
@@ -100,8 +106,23 @@ async function runLiveAgent(
     workflowName: "conductor-planning",
   });
   try {
-    const result = await runner.run(agent, prompt, { maxTurns: mcpServer ? 4 : 2 });
-    return agentProposalSchema.parse(result.finalOutput);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const attemptPrompt = attempt === 0
+        ? prompt
+        : [
+            prompt,
+            "The previous provider attempt did not produce a valid structured proposal.",
+            "Retry once with concise complete artifacts, no more than eight files, no more than twelve plan steps, and exactly one bounded verification command.",
+          ].join("\n");
+      try {
+        const result = await runner.run(agent, attemptPrompt, { maxTurns: mcpServer ? 4 : 2 });
+        return agentProposalSchema.parse(result.finalOutput);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
   } finally {
     await mcpServer?.close().catch(() => undefined);
   }
@@ -175,7 +196,8 @@ export async function POST(request: Request) {
         input.workspace,
         normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
       );
-    } catch {
+    } catch (error) {
+      console.error("Agent provider request failed after retry", error instanceof Error ? error.message : "unknown provider error");
       throw new ApiError(
         502,
         "agent_provider_unavailable",

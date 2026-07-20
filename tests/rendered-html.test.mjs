@@ -25,6 +25,8 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(workspace, /fileTree/);
   assert.match(workspace, /eventStream/);
   assert.match(workspace, /Approve, apply & run/);
+  assert.match(workspace, /inspectorPanelRef\.current\?\.scrollTo/);
+  assert.match(workspace, /fallbackProposalEntrypoint/);
   assert.match(workspace, /workspaceFiles/);
   assert.match(workspace, /LOCAL_GIT_COMPANION/);
   assert.match(workspace, /git\/commit/);
@@ -32,11 +34,14 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(workspace, /fs\/read/);
   assert.match(workspace, /terminal\/execute/);
   assert.match(workspace, /collectRepositoryContext/);
+  assert.match(workspace, /includeAmbientRepositoryState/);
+  assert.match(workspace, /total \+ bytes > 24_000/);
   assert.match(workspaceRoute, /afterSequence/);
   assert.doesNotMatch(workspace, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
   assert.doesNotMatch(workspace, /Test runner started|Single-use capability issued/i);
   assert.doesNotMatch(workspace, /runPythonSandbox|Fallback proposal|demo mode|Atlas Engineering/i);
   assert.doesNotMatch(agentRoute, /createDemoAgentProposal|liveDiagnostic|provider\s*!==\s*["']demo/i);
+  assert.match(agentRoute, /previous provider attempt did not produce a valid structured proposal/i);
   assert.doesNotMatch(provider, /provider:\s*["']demo["']/i);
   assert.doesNotMatch(environmentStore, /demoFileTree|demoDiff|Atlas Engineering|Harden session validation/i);
   assert.ok(Object.keys(JSON.parse(builtManifest)).length > 0);

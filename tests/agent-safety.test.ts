@@ -69,6 +69,21 @@ test("raises Python drafts and execution proposals to R1 with approval", () => {
   assert.equal(assessment.normalized, true);
 });
 
+test("accepts detailed implementation plans for complex coding tasks", () => {
+  const proposal = agentProposalSchema.parse({
+    summary: "Prepare a multi-step Python project proposal.",
+    plan: Array.from({ length: 10 }, (_, index) => `Implementation step ${index + 1}`),
+    proposedAction: "Create reviewed Python project files.",
+    riskLevel: "R1",
+    needsApproval: true,
+    evidence: Array.from({ length: 8 }, (_, index) => `Requirement ${index + 1}`),
+    artifacts: [],
+    execution: null,
+  });
+  assert.equal(proposal.plan.length, 10);
+  assert.equal(proposal.evidence.length, 8);
+});
+
 test("strictly rejects absolute, traversal, and Windows paths", () => {
   for (const path of ["/tmp/main.py", "../main.py", "src/../main.py", "C:\\temp\\main.py"]) {
     assert.throws(() =>

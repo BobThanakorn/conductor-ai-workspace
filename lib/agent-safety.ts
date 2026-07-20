@@ -130,11 +130,11 @@ export const pythonExecutionSchema = z
 export const agentProposalSchema = z
   .object({
     summary: z.string().min(1).max(1_200),
-    plan: z.array(z.string().min(1).max(240)).min(1).max(5),
+    plan: z.array(z.string().min(1).max(320)).min(1).max(12),
     proposedAction: z.string().min(1).max(240),
     riskLevel: z.enum(["R0", "R1", "R2", "R3"]),
     needsApproval: z.boolean(),
-    evidence: z.array(z.string().min(1).max(240)).max(5),
+    evidence: z.array(z.string().min(1).max(320)).max(12),
     artifacts: z.array(pythonArtifactSchema).max(MAX_AGENT_ARTIFACTS),
     execution: pythonExecutionSchema.nullable(),
   })

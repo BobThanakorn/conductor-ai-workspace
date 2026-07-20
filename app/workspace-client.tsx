@@ -508,6 +508,7 @@ export default function WorkspaceClient() {
   const [repositoryFileContents, setRepositoryFileContents] = useState<Record<string, string>>({});
   const [localGitConnected, setLocalGitConnected] = useState(false);
   const [acceptedFiles, setAcceptedFiles] = useState<Set<string>>(() => new Set());
+  const inspectorPanelRef = useRef<HTMLElement | null>(null);
 
   const refreshLocalGit = useCallback(async (silent = true) => {
     try {
@@ -707,6 +708,10 @@ export default function WorkspaceClient() {
   }, [loadWorkspace, refreshLocalGit]);
 
   useEffect(() => {
+    if (pendingProposal) inspectorPanelRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [pendingProposal]);
+
+  useEffect(() => {
     function closePanels(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         setExplorerOpen(false);
@@ -768,9 +773,18 @@ export default function WorkspaceClient() {
       : { additions: 0, deletions: 0 };
   const requestedDraftEntrypoint = pendingProposal?.execution?.entrypoint
     ?.trim();
+  const requestedProposalCommand = pendingProposal?.execution?.command?.trim();
+  const proposalCommand = requestedProposalCommand && !/^(?:python3?|node|npm|npx|bash|sh|pwsh|powershell)$/i.test(requestedProposalCommand)
+    ? requestedProposalCommand
+    : undefined;
+  const fallbackProposalEntrypoint = draftPythonFiles.find((file) => /(?:^|\/)test_[^/]+\.py$/i.test(file.path))?.path
+    ?? draftPythonFiles[0]?.path
+    ?? null;
   const proposalEntrypoint = requestedDraftEntrypoint
-    ? draftPythonFiles.some((file) => file.path === requestedDraftEntrypoint) ? requestedDraftEntrypoint : null
-    : draftPythonFiles[0]?.path ?? null;
+    ? draftPythonFiles.some((file) => file.path === requestedDraftEntrypoint)
+      ? requestedDraftEntrypoint
+      : requestedProposalCommand ? fallbackProposalEntrypoint : null
+    : fallbackProposalEntrypoint;
   const proposalArgs = normalizePythonArgs(pendingProposal?.execution?.args);
   const requestedTimeoutMs = pendingProposal?.execution?.timeoutMs;
   const proposalTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs)
@@ -829,19 +843,23 @@ export default function WorkspaceClient() {
     if (!localGitConnected) return [];
     const textExtensions = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|kts|cs|cpp|c|h|hpp|rb|php|swift|sql|md|json|ya?ml|toml|ini|css|scss|html|sh|ps1)$/i;
     const normalizedMessage = message.toLowerCase();
+    const createsNewSurface = /(?:\bcreate\b|\bscaffold\b|\bnew (?:project|file)\b|สร้าง(?:โปรเจกต์|โครงการ|ไฟล์)|โปรเจกต์ใหม่)/i.test(message);
+    const editsExistingSurface = /(?:\bfix\b|\bupdate\b|\bmodify\b|\brefactor\b|\bdebug\b|แก้(?:ไข)?|ปรับปรุง|รีแฟกเตอร์|ตรวจสอบไฟล์|ไฟล์เดิม)/i.test(message);
+    const includeAmbientRepositoryState = !createsNewSurface || editsExistingSurface;
     const changed = new Set(collectChangedFiles(fileTree).map((file) => file.id));
     const candidates = flattenFileTree(fileTree)
       .filter((path) => textExtensions.test(path))
       .map((path) => ({
         path,
         score:
-          (path === activeFile ? 100 : 0) +
-          (changed.has(path) ? 40 : 0) +
+          (includeAmbientRepositoryState && path === activeFile ? 100 : 0) +
+          (includeAmbientRepositoryState && changed.has(path) ? 40 : 0) +
           (normalizedMessage.includes(path.toLowerCase()) ? 80 : 0) +
           (normalizedMessage.includes(path.split("/").at(-1)?.toLowerCase() ?? "") ? 30 : 0),
       }))
+      .filter(({ score }) => score > 0)
       .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
-      .slice(0, 8);
+      .slice(0, 4);
     const snapshots = await Promise.all(candidates.map(async ({ path }) => {
       try {
         const response = await fetch(`${LOCAL_GIT_COMPANION}/fs/read`, {
@@ -852,7 +870,7 @@ export default function WorkspaceClient() {
         if (!response.ok) return null;
         const data = await response.json() as { content?: string };
         if (typeof data.content !== "string" || !data.content) return null;
-        return { path, content: data.content.slice(0, 32_000) };
+        return { path, content: data.content.slice(0, 16_000) };
       } catch {
         return null;
       }
@@ -861,7 +879,7 @@ export default function WorkspaceClient() {
     return snapshots.filter((snapshot): snapshot is { path: string; content: string } => {
       if (!snapshot) return false;
       const bytes = new TextEncoder().encode(snapshot.content).byteLength;
-      if (total + bytes > 120_000) return false;
+      if (total + bytes > 24_000) return false;
       total += bytes;
       return true;
     });
@@ -1080,7 +1098,7 @@ export default function WorkspaceClient() {
     const execution: PythonExecutionRequest | null = pendingProposal.execution && proposalEntrypoint
       ? {
           entrypoint: proposalEntrypoint,
-          command: pendingProposal.execution.command,
+          command: proposalCommand,
           args: proposalArgs ?? [],
           timeoutMs: proposalTimeoutMs,
         }
@@ -1260,13 +1278,19 @@ export default function WorkspaceClient() {
       await loadWorkspace(true);
       showNotice(normalizePythonFiles(data.output?.artifacts).length ? "Proposal ready for review" : "Agent response ready");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Agent request failed.";
+      const errorMessage = error instanceof Error ? error.message : "Agent request failed.";
+      setPrompt(message);
       setTerminalLines((current) => [
         ...current.slice(-16),
-        { type: "error", text: ` Agent error · ${message}` },
+        { type: "error", text: ` Agent error · ${errorMessage}` },
         { type: "summary", text: " No proposal was generated and no files were changed." },
       ]);
-      showNotice(message);
+      setTimeline((current) => current.map((item) =>
+        item.state === "active"
+          ? { ...item, title: "Agent request failed", detail: errorMessage, state: "complete" as const }
+          : item,
+      ));
+      showNotice(errorMessage);
     } finally {
       setBusyAction(null);
     }
@@ -1647,7 +1671,7 @@ export default function WorkspaceClient() {
           </form>
         </main>
 
-        <aside className={`inspector-panel ${inspectorOpen ? "is-open" : ""}`} aria-label="Task and context inspector">
+        <aside ref={inspectorPanelRef} className={`inspector-panel ${inspectorOpen ? "is-open" : ""}`} aria-label="Task and context inspector">
           <div className="run-header">
             <div>
               <span className="eyebrow">Active run</span>
@@ -1722,7 +1746,7 @@ export default function WorkspaceClient() {
               )}
 
               <dl className="proposal-execution">
-                <div><dt>Execution</dt><dd className={pendingProposal.execution && !proposalEntrypoint ? "invalid" : ""}>{pendingProposal.execution ? pendingProposal.execution.command || proposalEntrypoint || "Invalid or missing" : "Apply files only"}</dd></div>
+                <div><dt>Execution</dt><dd className={pendingProposal.execution && !proposalEntrypoint ? "invalid" : ""}>{pendingProposal.execution ? proposalCommand || proposalEntrypoint || "Invalid or missing" : "Apply files only"}</dd></div>
                 {pendingProposal.execution && <div><dt>Timeout</dt><dd>{proposalTimeoutMs} ms</dd></div>}
                 {pendingProposal.execution && <div><dt>Arguments</dt><dd className={proposalArgs === null ? "invalid" : ""}>{proposalArgs === null ? "Invalid limits" : `${proposalArgs.length} supplied`}</dd></div>}
               </dl>
