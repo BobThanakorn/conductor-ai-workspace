@@ -222,6 +222,15 @@ type WorkspaceApiResponse = {
     model: string;
     branch: string;
   }>>;
+  recentAgentRuns?: Array<Partial<{
+    id: string;
+    taskId: string | null;
+    mode: string;
+    model: string;
+    summary: string;
+    plan: string[];
+    createdAt: string;
+  }>>;
   approvals?: WorkspaceApproval[];
   pendingApprovals?: WorkspaceApproval[];
   events?: Array<
@@ -493,6 +502,8 @@ function diffFromUnifiedText(file: string, text: string): WorkspaceDiff {
 
 export default function WorkspaceClient() {
   const agentModelOverride = useRef<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(null);
+  const [tasks, setTasks] = useState<Array<NonNullable<WorkspaceApiResponse["tasks"]>[number]>>([]);
   const [workspace, setWorkspace] = useState(EMPTY_WORKSPACE);
   const [apiState, setApiState] = useState<ApiState>("connecting");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
@@ -512,6 +523,10 @@ export default function WorkspaceClient() {
   const [prompt, setPrompt] = useState("");
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
+  const [environmentPickerOpen, setEnvironmentPickerOpen] = useState(false);
+  const [newAgentTitle, setNewAgentTitle] = useState("");
+  const [newAgentGoal, setNewAgentGoal] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [terminalLines, setTerminalLines] = useState(EMPTY_TERMINAL_LINES);
   const [pendingProposal, setPendingProposal] = useState<CodingAgentProposal | null>(null);
@@ -623,7 +638,10 @@ export default function WorkspaceClient() {
   const loadWorkspace = useCallback(async (silent = false, signal?: AbortSignal) => {
     if (!silent) setApiState("connecting");
     try {
-      const response = await fetch("/api/workspace", { cache: "no-store", signal });
+      const taskQuery = selectedTaskIdRef.current
+        ? `?taskId=${encodeURIComponent(selectedTaskIdRef.current)}`
+        : "";
+      const response = await fetch(`/api/workspace${taskQuery}`, { cache: "no-store", signal });
       if (!response.ok) throw new Error("Workspace unavailable");
 
       const data = (await response.json()) as WorkspaceApiResponse;
@@ -632,6 +650,8 @@ export default function WorkspaceClient() {
         ? remote.repository
         : undefined;
       const primaryTask = data.activeTask ?? data.tasks?.[0];
+
+      setTasks(data.tasks ?? []);
 
       setWorkspace((current) => ({
         id: remote?.id || current.id,
@@ -704,6 +724,25 @@ export default function WorkspaceClient() {
         setTimeline(apiEvents);
       }
 
+      if (data.recentAgentRuns?.length) {
+        setChatEntries((current) => {
+          if (current.length !== 1 || current[0]?.id !== "welcome") return current;
+          return [
+            ...data.recentAgentRuns!
+              .slice()
+              .reverse()
+              .map((run, index) => ({
+                id: run.id || `restored-run-${index}`,
+                role: "agent" as const,
+                content: run.summary || "Agent response recorded.",
+                plan: run.plan?.filter((step): step is string => typeof step === "string"),
+                status: "ready" as const,
+              })),
+            current[0],
+          ];
+        });
+      }
+
       setApiState("connected");
     } catch (error) {
       if ((error as Error).name !== "AbortError") setApiState("unavailable");
@@ -738,6 +777,8 @@ export default function WorkspaceClient() {
       if (event.key === "Escape") {
         setExplorerOpen(false);
         setInspectorOpen(false);
+        setSessionPickerOpen(false);
+        setEnvironmentPickerOpen(false);
       }
     }
     window.addEventListener("keydown", closePanels);
@@ -933,6 +974,53 @@ export default function WorkspaceClient() {
       await loadWorkspace(true);
     } catch {
       setApiState("unavailable");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function selectTask(taskId: string) {
+    selectedTaskIdRef.current = taskId;
+    setSessionPickerOpen(false);
+    setPendingProposal(null);
+    setExecutionResult(null);
+    setExecutionState("idle");
+    setChatEntries([{ id: "welcome", role: "agent", content: "Loading this task session…", status: "working" }]);
+    await loadWorkspace(false);
+  }
+
+  async function createNewAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = newAgentTitle.trim();
+    const goal = newAgentGoal.trim();
+    if (title.length < 3 || goal.length < 3 || busyAction) return;
+    setBusyAction("create_task");
+    try {
+      const idempotencyKey = `task-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const response = await fetch("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({
+          action: "create_task",
+          title,
+          goal,
+          workspaceId: workspace.id,
+          idempotencyKey,
+          riskLevel: "R1",
+        }),
+      });
+      const data = await response.json() as { task?: { id?: string }; error?: { message?: string } };
+      if (!response.ok || !data.task?.id) throw new Error(data.error?.message || "The task could not be created.");
+      selectedTaskIdRef.current = data.task.id;
+      setNewAgentTitle("");
+      setNewAgentGoal("");
+      setSessionPickerOpen(false);
+      setChatEntries([{ id: "welcome", role: "agent", content: "New agent session created. Describe the change you want to make.", status: "ready" }]);
+      setPendingProposal(null);
+      await loadWorkspace(false);
+      showNotice("New Agent session created");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "The task could not be created.");
     } finally {
       setBusyAction(null);
     }
@@ -1392,11 +1480,17 @@ export default function WorkspaceClient() {
           <div className="brand-mark" aria-hidden="true">C</div>
           <span className="brand-name">Conductor</span>
           <span className="topbar-rule" aria-hidden="true" />
-          <div className="repository-crumb" aria-label="Current repository">
+          <button
+            className="repository-crumb repository-picker-button"
+            type="button"
+            aria-label="Open repository and session picker"
+            onClick={() => setSessionPickerOpen((open) => !open)}
+          >
             <span className="repo-owner">{workspace.repository.split("/").slice(0, -1).join("/") || "local"}</span>
             <span className="crumb-slash">/</span>
             <strong>{workspace.repository.split("/").at(-1)}</strong>
-          </div>
+            <span className="picker-caret" aria-hidden="true">⌄</span>
+          </button>
           <span className="branch-pill" aria-label={`Current branch ${workspace.branch || "not connected"}`}>
             <span aria-hidden="true">⑂</span>
             {workspace.branch ? workspace.branch.replace("agent/", "") : "not connected"}
@@ -1409,6 +1503,13 @@ export default function WorkspaceClient() {
         </div>
 
         <div className="topbar-actions">
+          <button className="new-agent-topbar" type="button" onClick={() => { setSessionPickerOpen(true); setNewAgentTitle(""); setNewAgentGoal(""); }}>
+            <span aria-hidden="true">✦</span> New Agent
+          </button>
+          <button className="environment-button" type="button" onClick={() => setEnvironmentPickerOpen((open) => !open)}>
+            <span className={`connection-dot ${localGitConnected ? "ready" : ""}`} aria-hidden="true" />
+            {localGitConnected ? "Local" : "Offline"}
+          </button>
           <span className={`connection-state ${localGitConnected ? "connected" : "unavailable"}`} title={localGitConnected ? workspace.repositoryPath : "Execution companion disconnected"}>
             <span className="connection-dot" aria-hidden="true" />
             {localGitConnected ? "Repository" : "No repository"}
@@ -1433,6 +1534,63 @@ export default function WorkspaceClient() {
           </button>
         </div>
       </header>
+
+      {sessionPickerOpen && (
+        <div className="workspace-popover session-popover" role="dialog" aria-label="Agent sessions">
+          <div className="popover-heading">
+            <div>
+              <span className="eyebrow">Agents Window</span>
+              <strong>Projects and sessions</strong>
+            </div>
+            <button type="button" className="popover-close" onClick={() => setSessionPickerOpen(false)} aria-label="Close session picker">×</button>
+          </div>
+          <div className="popover-section">
+            <div className="popover-section-title"><span>Current repository</span><span className={localGitConnected ? "state-good" : "state-warn"}>{localGitConnected ? "connected" : "companion offline"}</span></div>
+            <div className="repository-card">
+              <span className="repo-card-icon">▱</span>
+              <div><strong>{workspace.repository}</strong><span>{workspace.repositoryPath || "No local path detected"}</span></div>
+              <span className="repo-card-branch">{workspace.branch || "—"}</span>
+            </div>
+          </div>
+          <div className="popover-section">
+            <div className="popover-section-title"><span>Agent sessions</span><span>{tasks.length}</span></div>
+            <div className="session-list">
+              {!tasks.length && <div className="popover-empty">No sessions yet. Create one to start a durable Agent run.</div>}
+              {tasks.map((task) => {
+                const id = task.id || "";
+                const isSelected = id === (selectedTaskIdRef.current || workspace.taskId);
+                return (
+                  <button className={`session-row ${isSelected ? "selected" : ""}`} type="button" key={id} onClick={() => void selectTask(id)}>
+                    <span className={`session-status ${task.status === "completed" ? "done" : task.status === "cancelled" ? "muted" : "active"}`} aria-hidden="true" />
+                    <span className="session-copy"><strong>{task.title || "Untitled task"}</strong><span>{task.status?.replaceAll("_", " ") || "planning"} · {task.branch || "branch pending"}</span></span>
+                    <span className="session-progress">{typeof task.progress === "number" ? `${task.progress}%` : "—"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <form className="new-agent-form" onSubmit={createNewAgent}>
+            <div className="popover-section-title"><span>Start a new Agent</span><span>R1 · approval gated</span></div>
+            <input value={newAgentTitle} onChange={(event) => setNewAgentTitle(event.target.value)} placeholder="Task name" aria-label="New task name" maxLength={120} />
+            <textarea value={newAgentGoal} onChange={(event) => setNewAgentGoal(event.target.value)} placeholder="What should the Agent build, change, or verify?" aria-label="New task goal" rows={3} maxLength={2000} />
+            <button className="new-agent-submit" type="submit" disabled={newAgentTitle.trim().length < 3 || newAgentGoal.trim().length < 3 || busyAction !== null}>
+              {busyAction === "create_task" ? "Creating…" : "Create Agent session"}<span aria-hidden="true">→</span>
+            </button>
+          </form>
+        </div>
+      )}
+
+      {environmentPickerOpen && (
+        <div className="workspace-popover environment-popover" role="dialog" aria-label="Environment status">
+          <div className="popover-heading"><div><span className="eyebrow">Runtime</span><strong>Environment</strong></div><button type="button" className="popover-close" onClick={() => setEnvironmentPickerOpen(false)} aria-label="Close environment panel">×</button></div>
+          <div className="environment-status-card">
+            <div className="environment-status-line"><span className={`connection-dot ${localGitConnected ? "ready" : ""}`} aria-hidden="true" /><strong>{localGitConnected ? "Local companion ready" : "Local companion unavailable"}</strong></div>
+            <p>{localGitConnected ? "Filesystem, terminal, and local Git are reachable for this workspace." : "Start npm run companion:git in the repository to enable file, terminal, and Git actions."}</p>
+            <dl><div><dt>Runner</dt><dd>{workspace.runner}</dd></div><div><dt>Network</dt><dd>{workspace.network}</dd></div><div><dt>Model</dt><dd>{workspace.model}</dd></div></dl>
+          </div>
+          <button type="button" className="environment-refresh" onClick={() => void refreshLocalGit(false)}>↻ Refresh connection</button>
+        </div>
+      )}
 
       <div className="conductor-body">
         {(explorerOpen || inspectorOpen) && (

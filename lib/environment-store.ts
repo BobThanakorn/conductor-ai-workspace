@@ -399,6 +399,7 @@ export async function loadWorkspaceEvents(
 export async function loadWorkspaceState(
   database: D1Database,
   workspaceId = DEFAULT_WORKSPACE_ID,
+  selectedTaskId?: string,
 ) {
   const [workspaceResult, taskResult, approvalResult, eventResult, runResult] =
     await database.batch([
@@ -422,7 +423,7 @@ export async function loadWorkspaceState(
         .bind(workspaceId),
       database
         .prepare(
-          `SELECT id, task_id, mode, model, created_at
+          `SELECT id, task_id, mode, model, output_json, created_at
            FROM agent_runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 10`,
         )
         .bind(workspaceId),
@@ -439,6 +440,10 @@ export async function loadWorkspaceState(
   const tasks = taskRows.map(mapTask);
   const approvals = approvalRows.map(mapApproval);
   const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
+
+  const selectedTask = selectedTaskId
+    ? tasks.find((task) => task.id === selectedTaskId) ?? null
+    : null;
 
   return {
     ok: true,
@@ -465,7 +470,7 @@ export async function loadWorkspaceState(
       updatedAt: workspace.updated_at,
     },
     tasks,
-    activeTask:
+    activeTask: selectedTask ??
       tasks.find((task) =>
         ["planning", "approved_pending_execution", "executing", "validating", "waiting_for_approval"].includes(
           task.status,
@@ -476,12 +481,20 @@ export async function loadWorkspaceState(
     events: eventRows.map(mapEvent),
     recentAgentRuns: runResult.results.map((row) => {
       const value = row as Record<string, unknown>;
+      const output = parseJson<Record<string, unknown>>(
+        typeof value.output_json === "string" ? value.output_json : null,
+        {},
+      );
       return {
         id: value.id,
         taskId: value.task_id,
         mode: value.mode,
         model: value.model,
         createdAt: value.created_at,
+        summary: typeof output.summary === "string" ? output.summary.slice(0, 240) : "Agent response recorded.",
+        plan: Array.isArray(output.plan)
+          ? output.plan.filter((step): step is string => typeof step === "string").slice(0, 12)
+          : [],
       };
     }),
     meta: {

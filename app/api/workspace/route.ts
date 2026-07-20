@@ -27,6 +27,15 @@ function requestedWorkspaceId(request: Request): string {
     DEFAULT_WORKSPACE_ID;
 }
 
+function requestedTaskId(request: Request): string | undefined {
+  const value = new URL(request.url).searchParams.get("taskId")?.trim();
+  if (!value) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
+    throw new ApiError(400, "invalid_task_id", "taskId is not valid.");
+  }
+  return value;
+}
+
 function parseEventQuery(request: Request): {
   eventsOnly: boolean;
   afterSequence?: number;
@@ -114,7 +123,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const state = await loadWorkspaceState(database, workspaceId);
+    const state = await loadWorkspaceState(database, workspaceId, requestedTaskId(request));
     const activeTask = state.activeTask ?? state.tasks[0];
     const latestSequence = state.events.reduce(
       (highest, event) => Math.max(highest, event.sequence),
