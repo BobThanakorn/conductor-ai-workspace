@@ -8,7 +8,7 @@ import {
   validationError,
 } from "@/lib/api-contract";
 import {
-  DEMO_WORKSPACE_ID,
+  DEFAULT_WORKSPACE_ID,
   claimIdempotency,
   canonicalRequest,
   digest,
@@ -22,12 +22,12 @@ import {
 import {
   agentProposalSchema,
   assessAgentProposal,
-  createDemoAgentProposal,
   formatUntrustedUserRequest,
   formatUntrustedWorkspaceFiles,
   type AgentProposal,
 } from "@/lib/agent-safety";
 import {
+  AgentProviderConfigurationError,
   normalizeMcpGatewayUrl,
   resolveAgentRuntimeConfig,
   type AgentRuntimeConfig,
@@ -38,12 +38,13 @@ export const dynamic = "force-dynamic";
 type AgentOutput = AgentProposal;
 
 async function runLiveAgent(
-  runtime: Extract<AgentRuntimeConfig, { provider: "azure" | "openai" }>,
+  runtime: AgentRuntimeConfig,
   message: string,
   context: Awaited<ReturnType<typeof loadAgentContext>>,
   workspaceFiles: NonNullable<
     ReturnType<typeof agentRequestSchema.parse>["workspaceFiles"]
   >,
+  workspaceIdentity: ReturnType<typeof agentRequestSchema.parse>["workspace"],
   mcpGatewayUrl?: string,
 ): Promise<AgentOutput> {
   const { Agent, MCPServerStreamableHttp, OpenAIProvider, Runner } = await import("@openai/agents");
@@ -85,8 +86,8 @@ async function runLiveAgent(
   });
 
   const prompt = [
-    `Workspace: ${context.workspace.repository} on ${context.workspace.activeBranch}.`,
-    `Base snapshot: ${context.workspace.baseSha.slice(0, 12)}.`,
+    `Workspace: ${workspaceIdentity?.repository ?? context.workspace.repository}${workspaceIdentity?.branch ? ` on ${workspaceIdentity.branch}` : ""}.`,
+    `Base snapshot: ${(workspaceIdentity?.headSha || context.workspace.baseSha || "unavailable").slice(0, 40)}.`,
     context.task
       ? `Active task: ${context.task.title}. Goal: ${context.task.goal}. Status: ${context.task.status}.`
       : "No active task is selected.",
@@ -128,7 +129,7 @@ export async function POST(request: Request) {
     if (!parsed.success) throw validationError(parsed.error);
     const input = parsed.data;
     idempotencyKey = requireIdempotencyKey(request, input.idempotencyKey);
-    const workspaceId = input.workspaceId ?? DEMO_WORKSPACE_ID;
+    const workspaceId = input.workspaceId ?? DEFAULT_WORKSPACE_ID;
     scope = `agent:${workspaceId}`;
     database = getDatabase();
     await ensureEnvironmentDatabase(database);
@@ -150,35 +151,35 @@ export async function POST(request: Request) {
 
     const context = await loadAgentContext(database, workspaceId, input.taskId);
     const environmentBindings = getEnvironmentBindings();
-    const runtime = resolveAgentRuntimeConfig(environmentBindings);
-    const configuredModel = runtime.model;
-    let mode: "azure" | "openai" | "demo" = "demo";
-    let output: AgentOutput;
-    let liveDiagnostic: string | undefined;
-
-    if (runtime.provider !== "demo") {
-      try {
-        output = await runLiveAgent(
-          runtime,
-          input.message,
-          context,
-          input.workspaceFiles ?? [],
-          normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
+    let runtime: AgentRuntimeConfig;
+    try {
+      runtime = resolveAgentRuntimeConfig(environmentBindings);
+    } catch (error) {
+      if (error instanceof AgentProviderConfigurationError) {
+        throw new ApiError(
+          503,
+          "agent_provider_unconfigured",
+          "Configure Azure AI Foundry, OpenAI, or Docker Model Runner before sending a prompt.",
         );
-        mode = runtime.provider;
-      } catch {
-        output = createDemoAgentProposal(
-          input.message,
-          context.task?.title,
-          input.workspaceFiles ?? [],
-        );
-        liveDiagnostic = "Configured agent unavailable; a safe demo proposal was returned.";
       }
-    } else {
-      output = createDemoAgentProposal(
+      throw error;
+    }
+    const configuredModel = runtime.model;
+    let output: AgentOutput;
+    try {
+      output = await runLiveAgent(
+        runtime,
         input.message,
-        context.task?.title,
+        context,
         input.workspaceFiles ?? [],
+        input.workspace,
+        normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
+      );
+    } catch {
+      throw new ApiError(
+        502,
+        "agent_provider_unavailable",
+        "The configured model provider did not complete the request. No proposal was generated.",
       );
     }
 
@@ -191,7 +192,7 @@ export async function POST(request: Request) {
       scope,
       key: idempotencyKey,
       ownerToken,
-      mode,
+      mode: runtime.provider,
       model: configuredModel,
       promptHash: await digest(
         canonicalRequest({
@@ -223,7 +224,6 @@ export async function POST(request: Request) {
         normalized: assessment.normalized,
         reasons: assessment.reasons,
       },
-      ...(liveDiagnostic ? { liveDiagnostic } : {}),
     });
   } catch (error) {
     const body = errorBody(error);

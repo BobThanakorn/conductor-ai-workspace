@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   agentProposalSchema,
   assessAgentProposal,
-  createDemoAgentProposal,
   formatUntrustedUserRequest,
   formatUntrustedWorkspaceFiles,
   pythonWorkspaceFilesSchema,
@@ -103,40 +102,6 @@ test("requires execution to target a proposed artifact and bounds runtime fields
       artifacts: [{ path: "main.py", content: "print('ok')\n", language: "python" }],
       execution: { entrypoint: "main.py", args: [], timeoutMs: 300_001 },
     }));
-});
-
-test("returns a runnable approval-gated demo for English and Thai Python intent", () => {
-  for (const prompt of [
-    "Create and run a Python hello world program",
-    "สร้างไฟล์ main.py ด้วยไพทอนแล้วรัน",
-  ]) {
-    const proposal = createDemoAgentProposal(prompt);
-    assert.equal(proposal.artifacts[0]?.path, "main.py");
-    assert.match(proposal.artifacts[0]?.content ?? "", /def main\(\)/);
-    assert.equal(proposal.execution?.entrypoint, "main.py");
-    assert.equal(proposal.riskLevel, "R1");
-    assert.equal(proposal.needsApproval, true);
-  }
-});
-
-test("keeps deterministic analysis-only fallback free of drafts", () => {
-  const proposal = createDemoAgentProposal("Explain the current session validation flow");
-  assert.deepEqual(proposal.artifacts, []);
-  assert.equal(proposal.execution, null);
-  assert.equal(proposal.riskLevel, "R0");
-  assert.equal(proposal.needsApproval, false);
-});
-
-test("uses an existing Thai-requested Python file for a deterministic follow-up", () => {
-  const proposal = createDemoAgentProposal(
-    "แก้ไขไฟล์ main.py แล้วรันอีกครั้ง",
-    undefined,
-    [{ path: "main.py", content: "print('version one')\n" }],
-  );
-  assert.equal(proposal.artifacts[0]?.path, "main.py");
-  assert.match(proposal.artifacts[0]?.content ?? "", /version one/);
-  assert.match(proposal.artifacts[0]?.content ?? "", /follow-up revision/);
-  assert.equal(proposal.execution?.entrypoint, "main.py");
 });
 
 test("bounds current workspace Python context and labels it untrusted", () => {

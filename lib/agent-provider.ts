@@ -25,11 +25,14 @@ export type AgentRuntimeConfig =
       apiKey: string;
       baseURL?: string;
       model: string;
-    }
-  | {
-      provider: "demo";
-      model: string;
     };
+
+export class AgentProviderConfigurationError extends Error {
+  constructor() {
+    super("No live model provider is configured.");
+    this.name = "AgentProviderConfigurationError";
+  }
+}
 
 function configured(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -94,14 +97,7 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
     };
   }
 
-  return {
-    provider: "demo",
-    model:
-      configured(bindings.AZURE_AI_FOUNDRY_MODEL) ??
-      configured(bindings.OPENAI_AGENT_MODEL) ??
-      configured(bindings.OPENAI_MODEL) ??
-      DEFAULT_AZURE_FOUNDRY_MODEL,
-  };
+  throw new AgentProviderConfigurationError();
 }
 
 export function normalizeMcpGatewayUrl(value: string | undefined): string | undefined {

@@ -6,14 +6,15 @@ proposals before the execution companion changes a real repository.
 ## Capabilities
 
 - OpenAI Agents SDK orchestration with Azure AI Foundry as the preferred model
-  provider and an OpenAI-compatible fallback.
+  provider and an OpenAI-compatible alternative.
 - Complete, multi-language file proposals rendered in the editor before apply.
 - Real repository filesystem tree/read/write/delete through the companion.
 - Real terminal execution with stdout, stderr, exit code, timeout, and duration.
 - Git status, diff, commit, fetch, pull, push, branch, checkout, and merge.
 - GitHub pull-request creation through the provider API.
 - Payload-bound, short-lived, single-use approval tokens for every mutation.
-- A browser-only Pyodide fallback when the execution companion is unavailable.
+- Fail-closed provider and companion behavior: unavailable dependencies produce
+  an explicit error and never generate a simulated proposal or repository result.
 - Docker Compose packaging with a shared workspace volume, health checks,
   non-root execution, dropped Linux capabilities, and resource limits.
 - D1-backed task, approval, event, and idempotency records for the hosted UI.
@@ -102,7 +103,7 @@ AZURE_AI_FOUNDRY_API_KEY=replace-with-your-key
 AZURE_AI_FOUNDRY_MODEL=gpt-5.1-codex-mini
 ```
 
-`OPENAI_API_KEY` and `OPENAI_MODEL` remain optional fallbacks. `GITHUB_TOKEN`
+`OPENAI_API_KEY` and `OPENAI_MODEL` configure an optional alternate provider. `GITHUB_TOKEN`
 enables GitHub HTTPS authentication and pull-request creation. Never commit
 credential values.
 
@@ -118,7 +119,7 @@ Enter a task in the prompt box, for example:
 สร้างไฟล์ hello.py ให้พิมพ์ Hello from Python แล้วรันและแสดงผลลัพธ์
 ```
 
-Inspect the complete proposal and select **Approve, create & run**. With the
+Inspect the complete proposal and select **Approve, apply & run**. With the
 companion connected, the files are written into the mounted repository and the
 verification command runs in the container. The Terminal also accepts explicit
 commands such as `npm test`, `python3 main.py`, `git pull`, and `git push`; every

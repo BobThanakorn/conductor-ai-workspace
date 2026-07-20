@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AgentProviderConfigurationError,
   normalizeMcpGatewayUrl,
   DEFAULT_AZURE_FOUNDRY_ENDPOINT,
   normalizeAzureFoundryBaseUrl,
@@ -37,9 +38,11 @@ test("rejects a non-Azure endpoint before it can receive an Azure credential", (
   );
 });
 
-test("keeps a deterministic demo model when no server credential is configured", () => {
-  const runtime = resolveAgentRuntimeConfig({});
-  assert.deepEqual(runtime, { provider: "demo", model: "gpt-5.1-codex-mini" });
+test("fails closed when no live model provider is configured", () => {
+  assert.throws(
+    () => resolveAgentRuntimeConfig({}),
+    AgentProviderConfigurationError,
+  );
 });
 
 test("supports an OpenAI-compatible Docker Model Runner endpoint", () => {

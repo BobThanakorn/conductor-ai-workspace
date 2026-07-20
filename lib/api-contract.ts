@@ -112,6 +112,15 @@ export const agentRequestSchema = z
     workspaceId: identifierSchema.optional(),
     idempotencyKey: idempotencyKeySchema.optional(),
     workspaceFiles: pythonWorkspaceFilesSchema.optional(),
+    workspace: z
+      .object({
+        repository: z.string().trim().min(1).max(300),
+        path: z.string().trim().max(1_000).optional(),
+        branch: z.string().trim().max(300).optional(),
+        headSha: z.string().trim().max(128).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

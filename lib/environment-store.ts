@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { ApiError, type WorkspaceAction } from "@/lib/api-contract";
 import type { AgentEnvironmentBindings } from "@/lib/agent-provider";
 
-export const DEMO_WORKSPACE_ID = "workspace_atlas";
+export const DEFAULT_WORKSPACE_ID = "workspace_local";
 
 type EnvironmentBindings = AgentEnvironmentBindings & {
   DB?: D1Database;
@@ -251,6 +251,14 @@ async function initialize(database: D1Database): Promise<void> {
   );
 
   await database.batch([
+    database.prepare("DROP TRIGGER IF EXISTS task_events_no_update"),
+    database.prepare("DROP TRIGGER IF EXISTS task_events_no_delete"),
+    database.prepare("DELETE FROM agent_runs WHERE workspace_id = ?").bind("workspace_atlas"),
+    database.prepare("DELETE FROM approvals WHERE workspace_id = ?").bind("workspace_atlas"),
+    database.prepare("DELETE FROM task_events WHERE workspace_id = ?").bind("workspace_atlas"),
+    database.prepare("DELETE FROM tasks WHERE workspace_id = ?").bind("workspace_atlas"),
+    database.prepare("DELETE FROM workspaces WHERE id = ?").bind("workspace_atlas"),
+    database.prepare("DELETE FROM idempotency_keys WHERE scope LIKE ?").bind("%workspace_atlas%"),
     database
       .prepare(
         `INSERT OR IGNORE INTO workspaces
@@ -259,82 +267,23 @@ async function initialize(database: D1Database): Promise<void> {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        DEMO_WORKSPACE_ID,
-        "Atlas Engineering",
-        "openframe/atlas-web",
-        "/workspaces/atlas-web",
-        "github",
-        "main",
-        "agent/harden-session-validation",
-        "9f3a1c79d4b27a6e50b8c2027721c9f6a31aa847",
-        "c20d8a47b1975889c91cab1e22d2eab9277ff821",
-        "ready",
+        DEFAULT_WORKSPACE_ID,
+        "Local workspace",
+        "No repository connected",
+        "",
+        "local",
+        "",
+        "",
+        "",
+        "",
+        "disconnected",
       ),
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO tasks
-          (id, workspace_id, title, goal, status, risk_level, branch, base_sha,
-           actor, progress, model, created_by_idempotency_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        "task_harden_sessions",
-        DEMO_WORKSPACE_ID,
-        "Harden session validation",
-        "Validate rotated session tokens, add coverage for expired credentials, and prepare a reviewable patch without publishing it.",
-        "waiting_for_approval",
-        "R1",
-        "agent/harden-session-validation",
-        "9f3a1c79d4b27a6e50b8c2027721c9f6a31aa847",
-        "Maya Chen + Coding Agent",
-        64,
-        "gpt-5.1-codex-mini",
-        "seed:task_harden_sessions",
-      ),
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO approvals
-          (id, workspace_id, task_id, action, summary, risk_level, status,
-           details_json, action_digest, requested_by, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+7 days'))`,
-      )
-      .bind(
-        "approval_apply_session_patch",
-        DEMO_WORKSPACE_ID,
-        "task_harden_sessions",
-        "apply_patch",
-        "Apply the verified session-validation patch to the isolated task worktree.",
-        "R1",
-        "pending",
-        JSON.stringify({
-          files: ["src/auth/session.ts", "tests/auth/session.test.ts"],
-          additions: 38,
-          deletions: 9,
-          checks: ["unit tests: 24 passed", "typecheck: passed"],
-          reversible: true,
-        }),
-        "sha256:b9e43fe1b7ed6a452d6fb8fe63183a18a7ab2dcf43f2f41c46661cfac75366e2",
-        "Coding Agent",
-      ),
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO task_events
-          (event_id, workspace_id, task_id, type, actor, summary, payload_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        "evt_seed_approval_requested",
-        DEMO_WORKSPACE_ID,
-        "task_harden_sessions",
-        "approval.requested",
-        "Coding Agent",
-        "Patch validation passed; human approval is required before applying changes.",
-        JSON.stringify({
-          approvalId: "approval_apply_session_patch",
-          riskLevel: "R1",
-          evidence: ["24 tests passed", "typecheck passed"],
-        }),
-      ),
+    database.prepare(`CREATE TRIGGER IF NOT EXISTS task_events_no_update
+      BEFORE UPDATE ON task_events
+      BEGIN SELECT RAISE(ABORT, 'task_events are append-only'); END`),
+    database.prepare(`CREATE TRIGGER IF NOT EXISTS task_events_no_delete
+      BEFORE DELETE ON task_events
+      BEGIN SELECT RAISE(ABORT, 'task_events are append-only'); END`),
   ]);
 }
 
@@ -449,7 +398,7 @@ export async function loadWorkspaceEvents(
 
 export async function loadWorkspaceState(
   database: D1Database,
-  workspaceId = DEMO_WORKSPACE_ID,
+  workspaceId = DEFAULT_WORKSPACE_ID,
 ) {
   const [workspaceResult, taskResult, approvalResult, eventResult, runResult] =
     await database.batch([
@@ -507,9 +456,9 @@ export async function loadWorkspaceState(
         headSha: workspace.head_sha,
       },
       environment: {
-        runner: "Cloudflare isolated workspace",
-        sandbox: "task-scoped",
-        network: "deny by default",
+        runner: "Local execution companion",
+        sandbox: "workspace-scoped container when connected",
+        network: "runtime configured",
         policy: "human-gated R1+ mutations",
       },
       createdAt: workspace.created_at,
@@ -535,87 +484,12 @@ export async function loadWorkspaceState(
         createdAt: value.created_at,
       };
     }),
-    fileTree: demoFileTree,
-    diff: {
-      ...demoDiff,
-      baseSha: workspace.base_sha,
-      headSha: workspace.head_sha,
-    },
-    context: {
-      strategy: "hybrid lexical + semantic + symbol graph",
-      indexedFiles: 1_842,
-      indexedSymbols: 12_744,
-      snapshot: workspace.base_sha.slice(0, 12),
-      tokenBudget: { used: 18_420, limit: 64_000 },
-      sources: [
-        "src/auth/session.ts",
-        "tests/auth/session.test.ts",
-        "docs/security/session-lifecycle.md",
-      ],
-      freshness: "current worktree snapshot",
-    },
     meta: {
       eventOrder: "newest_first",
-      seededDemo: workspace.id === DEMO_WORKSPACE_ID,
       generatedAt: new Date().toISOString(),
     },
   };
 }
-
-const demoFileTree = [
-  {
-    id: "src",
-    name: "src",
-    type: "directory",
-    children: [
-      {
-        id: "src/auth",
-        name: "auth",
-        type: "directory",
-        children: [
-          { id: "src/auth/session.ts", name: "session.ts", type: "file", status: "modified" },
-          { id: "src/auth/tokens.ts", name: "tokens.ts", type: "file", status: "unchanged" },
-        ],
-      },
-      { id: "src/api.ts", name: "api.ts", type: "file", status: "unchanged" },
-    ],
-  },
-  {
-    id: "tests",
-    name: "tests",
-    type: "directory",
-    children: [
-      {
-        id: "tests/auth/session.test.ts",
-        name: "session.test.ts",
-        type: "file",
-        status: "modified",
-      },
-    ],
-  },
-  { id: "package.json", name: "package.json", type: "file", status: "unchanged" },
-] as const;
-
-const demoDiff = {
-  file: "src/auth/session.ts",
-  status: "modified",
-  additions: 18,
-  deletions: 4,
-  checks: ["24 unit tests passed", "TypeScript passed"],
-  hunks: [
-    {
-      header: "@@ -42,7 +42,15 @@ export async function validateSession(token: string)",
-      lines: [
-        { type: "context", oldNumber: 42, newNumber: 42, content: "  const payload = await verify(token);" },
-        { type: "removed", oldNumber: 43, newNumber: null, content: "  return payload.userId;" },
-        { type: "added", oldNumber: null, newNumber: 43, content: "  if (payload.expiresAt <= Date.now()) {" },
-        { type: "added", oldNumber: null, newNumber: 44, content: "    throw new SessionExpiredError();" },
-        { type: "added", oldNumber: null, newNumber: 45, content: "  }" },
-        { type: "added", oldNumber: null, newNumber: 46, content: "  return payload.userId;" },
-      ],
-    },
-  ],
-} as const;
 
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
@@ -1098,7 +972,7 @@ export async function persistAgentRun(
     scope: string;
     key: string;
     ownerToken: string;
-    mode: "azure" | "openai" | "demo";
+    mode: "azure" | "openai";
     model: string;
     promptHash: string;
     output: Record<string, unknown>;

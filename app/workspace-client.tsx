@@ -10,14 +10,13 @@ import {
   useState,
 } from "react";
 
-import { runPythonSandbox } from "@/lib/python-runner";
 import "./workspace.css";
 
 type ViewMode = "diff" | "code";
 type ApprovalState = "pending" | "approved" | "denied";
 type BottomPanel = "terminal" | "git";
 type EventState = "complete" | "active" | "waiting" | "queued";
-type ApiState = "connecting" | "connected" | "preview";
+type ApiState = "connecting" | "connected" | "unavailable";
 
 type TimelineEvent = {
   id: string;
@@ -170,16 +169,10 @@ type PythonExecutionResult = {
   durationMs?: number;
 };
 
-type ApprovedPythonRun = {
-  files: GeneratedPythonFile[];
-  execution: PythonExecutionRequest;
-};
-
 type AgentApiResponse = {
   output?: CodingAgentProposal;
   model?: string;
   mode?: string;
-  liveDiagnostic?: string;
 };
 
 type WorkspaceApiResponse = {
@@ -238,259 +231,40 @@ type WorkspaceApiResponse = {
   eventStream?: { endpoint?: string; afterSequence?: number };
 };
 
-const INITIAL_WORKSPACE: WorkspaceMeta = {
-  id: "workspace_atlas",
-  name: "Atlas Engineering",
-  repository: "openframe/atlas-web",
-  repositoryPath: "/workspace/atlas-web",
-  branch: "agent/harden-session-validation",
-  baseBranch: "main",
-  baseSha: "9f3a1c79d4b2",
-  headSha: "c6a174b5a1f3",
-  network: "Blocked",
-  runner: "Cloudflare isolated workspace",
-  taskId: "task_harden_sessions",
-  taskTitle: "Harden session validation",
-  taskStatus: "waiting_for_approval",
-  taskProgress: 64,
-  model: "gpt-5.1-codex-mini",
+const EMPTY_WORKSPACE: WorkspaceMeta = {
+  id: "workspace_local",
+  name: "Local workspace",
+  repository: "No repository connected",
+  repositoryPath: "",
+  branch: "",
+  baseBranch: "",
+  baseSha: "",
+  headSha: "",
+  network: "Unavailable",
+  runner: "Execution companion disconnected",
+  taskId: "",
+  taskTitle: "No active task",
+  taskStatus: "idle",
+  taskProgress: 0,
+  model: "Not configured",
 };
 
-const INITIAL_FILE_TREE: FileTreeNode[] = [
-  {
-    id: "src",
-    name: "src",
-    type: "directory",
-    children: [
-      {
-        id: "src/agent",
-        name: "agent",
-        type: "directory",
-        children: [
-          { id: "src/agent/workspace-agent.ts", name: "workspace-agent.ts", type: "file", status: "modified" },
-          { id: "src/agent/context.ts", name: "context.ts", type: "file" },
-          { id: "src/agent/types.ts", name: "types.ts", type: "file" },
-        ],
-      },
-      {
-        id: "src/policy",
-        name: "policy",
-        type: "directory",
-        children: [
-          { id: "src/policy/policy.ts", name: "policy.ts", type: "file", status: "modified" },
-          { id: "src/policy/types.ts", name: "types.ts", type: "file" },
-        ],
-      },
-    ],
-  },
-  {
-    id: "tests",
-    name: "tests",
-    type: "directory",
-    children: [
-      { id: "tests/approval.test.ts", name: "approval.test.ts", type: "file", status: "added" },
-      { id: "tests/context.test.ts", name: "context.test.ts", type: "file" },
-    ],
-  },
-  { id: "package.json", name: "package.json", type: "file" },
-  { id: "README.md", name: "README.md", type: "file" },
+const EMPTY_FILE_TREE: FileTreeNode[] = [];
+
+const EMPTY_CONTEXT: WorkspaceContext = {
+  strategy: "request-scoped repository file selection",
+  indexedFiles: 0,
+  indexedSymbols: 0,
+  snapshot: "unavailable",
+  tokenBudget: { used: 0, limit: 0 },
+  sources: [],
+  freshness: "No agent context has been assembled yet.",
+};
+
+const EMPTY_TERMINAL_LINES = [
+  { type: "pending", text: " Waiting for the local execution companion…" },
+  { type: "summary", text: " No command has been executed." },
 ];
-
-const INITIAL_CONTEXT: WorkspaceContext = {
-  strategy: "hybrid lexical + semantic + symbol graph",
-  indexedFiles: 1842,
-  indexedSymbols: 12744,
-  snapshot: "8f2c1d7",
-  tokenBudget: { used: 6842, limit: 24000 },
-  sources: ["src/agent/workspace-agent.ts", "src/policy/policy.ts", "tests/approval.test.ts", "SECURITY.md"],
-  freshness: "current worktree snapshot",
-};
-
-const INITIAL_APPROVAL: WorkspaceApproval = {
-  id: "approval-test-suite-01",
-  taskId: "task_harden_sessions",
-  action: "run_tests",
-  summary: "Run the repository test suite in the isolated task worktree.",
-  riskLevel: "R1",
-  status: "pending",
-  details: { command: "npm test -- --runInBand", reversible: true },
-};
-
-const INITIAL_TIMELINE: TimelineEvent[] = [
-  {
-    id: "event-1",
-    title: "Task understood",
-    detail: "Mapped acceptance criteria and trust boundaries",
-    time: "10:42:08",
-    state: "complete",
-  },
-  {
-    id: "event-2",
-    title: "Context assembled",
-    detail: "12 sources · 6,842 tokens · snapshot 8f2c1d7",
-    time: "10:42:14",
-    state: "complete",
-  },
-  {
-    id: "event-3",
-    title: "Patch prepared",
-    detail: "3 files changed · +48 −12",
-    time: "10:43:31",
-    state: "complete",
-  },
-  {
-    id: "event-4",
-    title: "Approval required",
-    detail: "Run repository test suite in the task sandbox",
-    time: "10:43:34",
-    state: "active",
-  },
-  {
-    id: "event-5",
-    title: "Verify and review",
-    detail: "Waiting for approved test execution",
-    time: "—",
-    state: "queued",
-  },
-];
-
-const FILE_CONTENT: Record<string, string[]> = {
-  "src/agent/workspace-agent.ts": [
-    'import { run, tool } from "@openai/agents";',
-    'import { policyGate } from "../policy/policy";',
-    'import type { WorkspaceContext } from "./context";',
-    "",
-    "export async function executeWorkspaceTask(",
-    "  context: WorkspaceContext,",
-    "  request: AgentRequest,",
-    ") {",
-    "  const capability = await policyGate.evaluate({",
-    "    actor: request.actor,",
-    "    workspace: context.workspaceId,",
-    "    action: request.action,",
-    "    snapshot: context.snapshot,",
-    "  });",
-    "",
-    "  if (capability.requiresApproval) {",
-    "    return suspendForApproval(capability);",
-    "  }",
-    "",
-    "  return run(workspaceAgent, request.prompt, { context });",
-    "}",
-  ],
-  "src/policy/policy.ts": [
-    'import { createHash } from "node:crypto";',
-    'import type { ActionIntent, PolicyDecision } from "./types";',
-    "",
-    "const MUTATING_ACTIONS = new Set([",
-    '  "filesystem.write",',
-    '  "git.commit",',
-    '  "git.push",',
-    '  "provider.pull_request.create",',
-    "]);",
-    "",
-    "export function evaluateIntent(intent: ActionIntent): PolicyDecision {",
-    "  const actionDigest = createHash(\"sha256\")",
-    "    .update(JSON.stringify(intent))",
-    '    .digest("hex");',
-    "",
-    "  return {",
-    "    actionDigest,",
-    "    effect: MUTATING_ACTIONS.has(intent.action) ? \"approval\" : \"allow\",",
-    "    expiresInSeconds: 300,",
-    "  };",
-    "}",
-  ],
-  "tests/approval.test.ts": [
-    'import { describe, expect, it } from "vitest";',
-    'import { evaluateIntent } from "../src/policy/policy";',
-    "",
-    'describe("workspace approvals", () => {',
-    '  it("requires approval for persistent mutations", () => {',
-    "    const decision = evaluateIntent({",
-    '      action: "git.push",',
-    '      workspaceId: "ws_local",',
-    '      branch: "agent/policy-guardrails",',
-    "    });",
-    "",
-    '    expect(decision.effect).toBe("approval");',
-    "    expect(decision.actionDigest).toHaveLength(64);",
-    "  });",
-    "});",
-  ],
-};
-
-const DIFF_CONTENT: Record<string, DiffLine[]> = {
-  "src/agent/workspace-agent.ts": [
-    { kind: "fold", content: "@@ -1,8 +1,10 @@" },
-    { oldLine: 1, newLine: 1, kind: "context", content: 'import { run, tool } from "@openai/agents";' },
-    { newLine: 2, kind: "addition", content: 'import { policyGate } from "../policy/policy";' },
-    { oldLine: 2, newLine: 3, kind: "context", content: 'import type { WorkspaceContext } from "./context";' },
-    { oldLine: 3, newLine: 4, kind: "context", content: "" },
-    { oldLine: 4, newLine: 5, kind: "context", content: "export async function executeWorkspaceTask(" },
-    { oldLine: 5, newLine: 6, kind: "context", content: "  context: WorkspaceContext," },
-    { oldLine: 6, newLine: 7, kind: "context", content: "  request: AgentRequest," },
-    { oldLine: 7, newLine: 8, kind: "context", content: ") {" },
-    { oldLine: 8, kind: "deletion", content: "  return run(workspaceAgent, request.prompt, { context });" },
-    { newLine: 9, kind: "addition", content: "  const capability = await policyGate.evaluate({" },
-    { newLine: 10, kind: "addition", content: "    actor: request.actor," },
-    { newLine: 11, kind: "addition", content: "    workspace: context.workspaceId," },
-    { newLine: 12, kind: "addition", content: "    action: request.action," },
-    { newLine: 13, kind: "addition", content: "    snapshot: context.snapshot," },
-    { newLine: 14, kind: "addition", content: "  });" },
-    { newLine: 15, kind: "addition", content: "" },
-    { newLine: 16, kind: "addition", content: "  if (capability.requiresApproval) {" },
-    { newLine: 17, kind: "addition", content: "    return suspendForApproval(capability);" },
-    { newLine: 18, kind: "addition", content: "  }" },
-    { newLine: 19, kind: "addition", content: "" },
-    { newLine: 20, kind: "addition", content: "  return run(workspaceAgent, request.prompt, { context });" },
-    { oldLine: 9, newLine: 21, kind: "context", content: "}" },
-  ],
-  "src/policy/policy.ts": [
-    { kind: "fold", content: "@@ -7,10 +7,18 @@" },
-    { oldLine: 7, newLine: 7, kind: "context", content: "export function evaluateIntent(intent: ActionIntent) {" },
-    { oldLine: 8, kind: "deletion", content: "  return MUTATING_ACTIONS.has(intent.action);" },
-    { newLine: 8, kind: "addition", content: "  const actionDigest = createHash(\"sha256\")" },
-    { newLine: 9, kind: "addition", content: "    .update(JSON.stringify(intent))" },
-    { newLine: 10, kind: "addition", content: '    .digest("hex");' },
-    { newLine: 11, kind: "addition", content: "" },
-    { newLine: 12, kind: "addition", content: "  return {" },
-    { newLine: 13, kind: "addition", content: "    actionDigest," },
-    { newLine: 14, kind: "addition", content: "    effect: MUTATING_ACTIONS.has(intent.action) ? \"approval\" : \"allow\"," },
-    { newLine: 15, kind: "addition", content: "    expiresInSeconds: 300," },
-    { newLine: 16, kind: "addition", content: "  };" },
-    { oldLine: 9, newLine: 17, kind: "context", content: "}" },
-  ],
-  "tests/approval.test.ts": [
-    { kind: "fold", content: "@@ -0,0 +1,15 @@" },
-    { newLine: 1, kind: "addition", content: 'import { describe, expect, it } from "vitest";' },
-    { newLine: 2, kind: "addition", content: 'import { evaluateIntent } from "../src/policy/policy";' },
-    { newLine: 3, kind: "addition", content: "" },
-    { newLine: 4, kind: "addition", content: 'describe("workspace approvals", () => {' },
-    { newLine: 5, kind: "addition", content: '  it("requires approval for persistent mutations", () => {' },
-    { newLine: 6, kind: "addition", content: "    const decision = evaluateIntent({" },
-    { newLine: 7, kind: "addition", content: '      action: "git.push",' },
-    { newLine: 8, kind: "addition", content: '      workspaceId: "ws_local",' },
-    { newLine: 9, kind: "addition", content: "    });" },
-    { newLine: 10, kind: "addition", content: "" },
-    { newLine: 11, kind: "addition", content: '    expect(decision.effect).toBe("approval");' },
-    { newLine: 12, kind: "addition", content: "    expect(decision.actionDigest).toHaveLength(64);" },
-    { newLine: 13, kind: "addition", content: "  });" },
-    { newLine: 14, kind: "addition", content: "});" },
-  ],
-};
-
-const TERMINAL_LINES = [
-  { type: "muted", text: "$ validation evidence summary" },
-  { type: "muted", text: "" },
-  { type: "info", text: " EVIDENCE  workspace snapshot attached to this task" },
-  { type: "success", text: " ✓ unit tests                 24 passed (reported evidence)" },
-  { type: "success", text: " ✓ TypeScript                 passed (reported evidence)" },
-  { type: "pending", text: " ◌ local command execution    companion not connected" },
-  { type: "muted", text: "" },
-  { type: "summary", text: " No local, Git, network, or provider action was executed by this UI." },
-];
-
 const LOCAL_GIT_COMPANION = "http://127.0.0.1:8765";
 
 function nowTime() {
@@ -545,12 +319,11 @@ function apiDiffLines(diff: WorkspaceDiff): DiffLine[] {
   ]);
 }
 
-function sourceLabel(path: string, index: number) {
+function sourceLabel(path: string) {
   const parts = path.split("/");
   return {
     label: parts.at(-1) ?? path,
     detail: parts.length > 1 ? parts.slice(0, -1).join("/") : "repository root",
-    score: `${Math.max(78, 98 - index * 4)}%`,
   };
 }
 
@@ -605,33 +378,6 @@ function normalizePythonArgs(value: unknown): string[] | null {
   return args;
 }
 
-function mergeGeneratedTree(tree: FileTreeNode[], files: GeneratedPythonFile[]): FileTreeNode[] {
-  if (!files.length) return tree;
-  const localPaths = new Set(files.map((file) => file.path));
-  const knownFiles = new Set<string>();
-  const mergeNodes = (nodes: FileTreeNode[]): FileTreeNode[] => nodes.map((node) => {
-    if (node.type === "file") {
-      knownFiles.add(node.id);
-      return localPaths.has(node.id) ? { ...node, status: "local" } : node;
-    }
-    return { ...node, children: mergeNodes(node.children ?? []) };
-  });
-  const mergedTree = mergeNodes(tree);
-  const generated = files
-    .filter((file) => !knownFiles.has(file.path))
-    .map<FileTreeNode>((file) => ({
-      id: file.path,
-      name: file.path.split("/").at(-1) ?? file.path,
-      type: "file",
-      status: "local",
-    }));
-  if (!generated.length) return mergedTree;
-  return [
-    ...mergedTree,
-    { id: "__generated_python__", name: "Generated files", type: "directory", children: generated },
-  ];
-}
-
 function localGitTree(files: LocalGitFile[]): FileTreeNode[] {
   const root: FileTreeNode[] = [];
   const directories = new Map<string, FileTreeNode>();
@@ -662,7 +408,7 @@ function localGitTree(files: LocalGitFile[]): FileTreeNode[] {
         : "modified";
     children.push({ id: file.path, name, type: "file", status: code });
   }
-  return root.length ? root : INITIAL_FILE_TREE;
+  return root;
 }
 
 function localFsTree(entries: LocalFsEntry[], changed: LocalGitFile[]): FileTreeNode[] {
@@ -734,77 +480,34 @@ function diffFromUnifiedText(file: string, text: string): WorkspaceDiff {
   };
 }
 
-function normalizeExecutionResult(value: unknown): PythonExecutionResult {
-  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const runnerError = record.error && typeof record.error === "object"
-    ? record.error as Record<string, unknown>
-    : null;
-  const errorMessage = typeof runnerError?.message === "string" ? runnerError.message : "";
-  const stderr = typeof record.stderr === "string" ? record.stderr : "";
-  return {
-    stdout: typeof record.stdout === "string" ? record.stdout : "",
-    stderr: [stderr, errorMessage].filter(Boolean).join(stderr && errorMessage ? "\n" : ""),
-    exitCode: typeof record.exitCode === "number" ? record.exitCode : null,
-    timedOut: record.timedOut === true,
-    durationMs: typeof record.durationMs === "number" ? record.durationMs : undefined,
-  };
-}
-
-function executionTerminalLines(run: ApprovedPythonRun, result?: PythonExecutionResult) {
-  const command = `$ python ${run.execution.entrypoint}${run.execution.args?.length ? ` ${run.execution.args.join(" ")}` : ""}`;
-  if (!result) {
-    return [
-      { type: "muted", text: command },
-      { type: "running", text: " ◌ Python sandbox is running…" },
-    ];
-  }
-  const stdout = result.stdout.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "output", text }));
-  const stderr = result.stderr.split(/\r?\n/).filter(Boolean).map((text) => ({ type: "error", text }));
-  const exitText = result.timedOut
-    ? ` Process timed out${result.durationMs ? ` after ${result.durationMs}ms` : ""}`
-    : ` Process exited with status ${result.exitCode ?? "unknown"}${result.durationMs ? ` · ${result.durationMs}ms` : ""}`;
-  return [
-    { type: "muted", text: command },
-    ...stdout,
-    ...stderr,
-    { type: result.exitCode === 0 && !result.timedOut ? "complete" : "error", text: exitText },
-  ];
-}
-
 export default function WorkspaceClient() {
   const agentModelOverride = useRef<string | null>(null);
-  const [workspace, setWorkspace] = useState(INITIAL_WORKSPACE);
+  const [workspace, setWorkspace] = useState(EMPTY_WORKSPACE);
   const [apiState, setApiState] = useState<ApiState>("connecting");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
   const [bottomPanel, setBottomPanel] = useState<BottomPanel>("terminal");
-  const [activeFile, setActiveFile] = useState("src/agent/workspace-agent.ts");
-  const [fileTree, setFileTree] = useState<FileTreeNode[]>(INITIAL_FILE_TREE);
+  const [activeFile, setActiveFile] = useState("");
+  const [fileTree, setFileTree] = useState<FileTreeNode[]>(EMPTY_FILE_TREE);
   const [serverDiff, setServerDiff] = useState<WorkspaceDiff | null>(null);
-  const [context, setContext] = useState<WorkspaceContext>(INITIAL_CONTEXT);
-  const [activeApproval, setActiveApproval] = useState<WorkspaceApproval | null>(INITIAL_APPROVAL);
-  const [folders, setFolders] = useState(() => collectDirectories(INITIAL_FILE_TREE));
-  const [timeline, setTimeline] = useState(INITIAL_TIMELINE);
-  const [approval, setApproval] = useState<ApprovalState>("pending");
+  const [context, setContext] = useState<WorkspaceContext>(EMPTY_CONTEXT);
+  const [activeApproval, setActiveApproval] = useState<WorkspaceApproval | null>(null);
+  const [folders, setFolders] = useState(() => collectDirectories(EMPTY_FILE_TREE));
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [approval, setApproval] = useState<ApprovalState>("approved");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [terminalLines, setTerminalLines] = useState(TERMINAL_LINES);
+  const [terminalLines, setTerminalLines] = useState(EMPTY_TERMINAL_LINES);
   const [pendingProposal, setPendingProposal] = useState<CodingAgentProposal | null>(null);
-  const [proposalOrigin, setProposalOrigin] = useState<{ mode: string; diagnostic?: string }>({ mode: "unknown" });
-  const [localPythonFiles, setLocalPythonFiles] = useState<GeneratedPythonFile[]>([]);
-  const [storageReady, setStorageReady] = useState(false);
   const [selectedGeneratedFile, setSelectedGeneratedFile] = useState<string | null>(null);
-  const [approvedPythonRun, setApprovedPythonRun] = useState<ApprovedPythonRun | null>(null);
   const [executionResult, setExecutionResult] = useState<PythonExecutionResult | null>(null);
   const [executionState, setExecutionState] = useState<"idle" | "running" | "complete" | "failed">("idle");
   const [terminalCommand, setTerminalCommand] = useState("");
   const [repositoryFileContents, setRepositoryFileContents] = useState<Record<string, string>>({});
   const [localGitConnected, setLocalGitConnected] = useState(false);
-  const [acceptedFiles, setAcceptedFiles] = useState(() =>
-    new Set(collectChangedFiles(INITIAL_FILE_TREE).map((file) => file.id)),
-  );
+  const [acceptedFiles, setAcceptedFiles] = useState<Set<string>>(() => new Set());
 
   const refreshLocalGit = useCallback(async (silent = true) => {
     try {
@@ -823,21 +526,31 @@ export default function WorkspaceClient() {
       const nextChanged = collectChangedFiles(nextTree);
       setLocalGitConnected(true);
       setApiState("connected");
+      const repositoryName = data.root?.split(/[\\/]/).filter(Boolean).at(-1) || "Local repository";
       setWorkspace((current) => ({
         ...current,
+        name: repositoryName,
+        repository: repositoryName,
         repositoryPath: data.root || current.repositoryPath,
         branch: data.branch || current.branch,
+        baseSha: data.head || current.baseSha,
         headSha: data.head || current.headSha,
-        network: "Local companion",
-        runner: "Local Git companion",
-        taskStatus: files.length ? "ready_to_review" : "clean",
-        taskProgress: files.length ? 82 : 100,
+        network: "Container runtime network",
+        runner: "Local execution companion",
+        taskStatus: files.length ? "changes_detected" : "clean",
+        taskProgress: 0,
       }));
       setFileTree(nextTree);
+      setContext((current) => ({
+        ...current,
+        indexedFiles: flattenFileTree(nextTree).length,
+        snapshot: data.head || "unavailable",
+        freshness: "Repository state read from the local companion.",
+      }));
       setFolders((current) => new Set([...collectDirectories(nextTree), ...current]));
       setAcceptedFiles(new Set(nextChanged.map((file) => file.id)));
       if (nextChanged[0]) {
-        setActiveFile((current) => current.endsWith(".py") ? current : nextChanged[0].id);
+        setActiveFile((current) => current || nextChanged[0].id);
         const diffResponse = await fetch(`${LOCAL_GIT_COMPANION}/git/diff`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -849,6 +562,7 @@ export default function WorkspaceClient() {
         }
       } else {
         setServerDiff(null);
+        setActiveFile((current) => current || flattenFileTree(nextTree)[0] || "");
       }
       setTerminalLines([
         { type: "muted", text: "$ git status --short" },
@@ -904,15 +618,9 @@ export default function WorkspaceClient() {
       const remoteFileTree = data.fileTree;
       if (remoteFileTree) {
         setFileTree(remoteFileTree);
-        setFolders((current) => new Set([
-          ...collectDirectories(remoteFileTree),
-          ...(current.has("__generated_python__") ? ["__generated_python__"] : []),
-        ]));
+        setFolders(new Set(collectDirectories(remoteFileTree)));
         const changed = collectChangedFiles(remoteFileTree);
-        setAcceptedFiles((current) => new Set([
-          ...changed.map((file) => file.id),
-          ...Array.from(current).filter((path) => path.endsWith(".py")),
-        ]));
+        setAcceptedFiles(new Set(changed.map((file) => file.id)));
         const fileIds = new Set<string>();
         const visit = (nodes: FileTreeNode[]) => nodes.forEach((node) => {
           if (node.type === "file") fileIds.add(node.id);
@@ -960,7 +668,7 @@ export default function WorkspaceClient() {
 
       setApiState("connected");
     } catch (error) {
-      if ((error as Error).name !== "AbortError") setApiState("preview");
+      if ((error as Error).name !== "AbortError") setApiState("unavailable");
     }
   }, []);
 
@@ -984,30 +692,6 @@ export default function WorkspaceClient() {
   }, [loadWorkspace, refreshLocalGit]);
 
   useEffect(() => {
-    const hydrateStorage = window.setTimeout(() => {
-      try {
-        const stored = window.localStorage.getItem("conductor.generatedPythonFiles");
-        const files = normalizePythonFiles(stored ? JSON.parse(stored) : []);
-        setLocalPythonFiles(files);
-        if (files.length) {
-          setFolders((current) => new Set(current).add("__generated_python__"));
-          setAcceptedFiles((current) => new Set([...current, ...files.map((file) => file.path)]));
-        }
-      } catch {
-        window.localStorage.removeItem("conductor.generatedPythonFiles");
-      } finally {
-        setStorageReady(true);
-      }
-    }, 0);
-    return () => window.clearTimeout(hydrateStorage);
-  }, []);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    window.localStorage.setItem("conductor.generatedPythonFiles", JSON.stringify(localPythonFiles));
-  }, [localPythonFiles, storageReady]);
-
-  useEffect(() => {
     function closePanels(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         setExplorerOpen(false);
@@ -1026,14 +710,7 @@ export default function WorkspaceClient() {
     () => draftPythonFiles.find((file) => file.path === activeFile) ?? null,
     [activeFile, draftPythonFiles],
   );
-  const selectedPythonFile = useMemo(
-    () => localPythonFiles.find((file) => file.path === activeFile) ?? null,
-    [activeFile, localPythonFiles],
-  );
-  const displayFileTree = useMemo(
-    () => mergeGeneratedTree(fileTree, localPythonFiles),
-    [fileTree, localPythonFiles],
-  );
+  const displayFileTree = fileTree;
   const currentDiff = useMemo<DiffLine[]>(() => {
     if (selectedDraftFile) {
       const lines = selectedDraftFile.content.split(/\r?\n/);
@@ -1042,19 +719,11 @@ export default function WorkspaceClient() {
         ...lines.map((content, index) => ({ kind: "addition" as const, newLine: index + 1, content })),
       ];
     }
-    if (selectedPythonFile) {
-      const lines = selectedPythonFile.content.split(/\r?\n/);
-      return [
-        { kind: "fold" as const, content: `@@ -0,0 +1,${lines.length} @@ generated file` },
-        ...lines.map((content, index) => ({ kind: "addition" as const, newLine: index + 1, content })),
-      ];
-    }
     if (serverDiff?.file === activeFile) return apiDiffLines(serverDiff);
-    return DIFF_CONTENT[activeFile] ?? [{ kind: "fold", content: "No diff is available for this file." }];
-  }, [activeFile, selectedDraftFile, selectedPythonFile, serverDiff]);
+    return [{ kind: "fold", content: activeFile ? "No Git diff is available for this file." : "No repository file selected." }];
+  }, [activeFile, selectedDraftFile, serverDiff]);
   const currentCode = useMemo(() => {
     if (selectedDraftFile) return selectedDraftFile.content.split(/\r?\n/);
-    if (selectedPythonFile) return selectedPythonFile.content.split(/\r?\n/);
     if (repositoryFileContents[activeFile] !== undefined) {
       return repositoryFileContents[activeFile].split(/\r?\n/);
     }
@@ -1063,34 +732,25 @@ export default function WorkspaceClient() {
         hunk.lines.filter((line) => line.type !== "removed").map((line) => line.content),
       );
     }
-    return FILE_CONTENT[activeFile] ?? [
-      `// ${activeFile}`,
-      "",
-      "// Source contents are not included in the current workspace snapshot.",
-    ];
-  }, [activeFile, repositoryFileContents, selectedDraftFile, selectedPythonFile, serverDiff]);
+    return [];
+  }, [activeFile, repositoryFileContents, selectedDraftFile, serverDiff]);
   const changedFiles = useMemo(() => collectChangedFiles(displayFileTree), [displayFileTree]);
   const editorFiles = useMemo(() => {
     const activeVirtual: FileTreeNode | null = selectedDraftFile
       ? { id: selectedDraftFile.path, name: selectedDraftFile.path.split("/").at(-1) ?? selectedDraftFile.path, type: "file", status: "draft" }
-      : selectedPythonFile
-        ? { id: selectedPythonFile.path, name: selectedPythonFile.path.split("/").at(-1) ?? selectedPythonFile.path, type: "file", status: "local" }
-        : null;
+      : null;
     const unique = new Map<string, FileTreeNode>();
     if (activeVirtual) unique.set(activeVirtual.id, activeVirtual);
     changedFiles.forEach((file) => unique.set(file.id, file));
-    if (!unique.size) unique.set(activeFile, { id: activeFile, name: activeFile.split("/").at(-1) ?? activeFile, type: "file" });
+    if (!unique.size && activeFile) unique.set(activeFile, { id: activeFile, name: activeFile.split("/").at(-1) ?? activeFile, type: "file" });
     return Array.from(unique.values()).slice(0, 3);
-  }, [activeFile, changedFiles, selectedDraftFile, selectedPythonFile]);
+  }, [activeFile, changedFiles, selectedDraftFile]);
   const contextSources = useMemo(() => context.sources.map(sourceLabel), [context.sources]);
-  const contextPercent = Math.min(100, Math.round((context.tokenBudget.used / Math.max(1, context.tokenBudget.limit)) * 100));
   const activeDiffStats = selectedDraftFile
     ? { additions: selectedDraftFile.content.split(/\r?\n/).length, deletions: 0 }
-    : selectedPythonFile
-    ? { additions: selectedPythonFile.content.split(/\r?\n/).length, deletions: 0 }
     : serverDiff?.file === activeFile
       ? { additions: serverDiff.additions, deletions: serverDiff.deletions }
-      : { additions: 24, deletions: 6 };
+      : { additions: 0, deletions: 0 };
   const requestedDraftEntrypoint = pendingProposal?.execution?.entrypoint
     ?.trim();
   const proposalEntrypoint = requestedDraftEntrypoint
@@ -1118,7 +778,7 @@ export default function WorkspaceClient() {
 
   async function selectFile(path: string) {
     setActiveFile(path);
-    setSelectedGeneratedFile(localPythonFiles.some((file) => file.path === path) ? path : null);
+    setSelectedGeneratedFile(null);
     setExplorerOpen(false);
     if (localGitConnected) {
       try {
@@ -1151,7 +811,7 @@ export default function WorkspaceClient() {
   }
 
   async function collectRepositoryContext(message: string) {
-    if (!localGitConnected) return localPythonFiles.map(({ path, content }) => ({ path, content }));
+    if (!localGitConnected) return [];
     const textExtensions = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|kts|cs|cpp|c|h|hpp|rb|php|swift|sql|md|json|ya?ml|toml|ini|css|scss|html|sh|ps1)$/i;
     const normalizedMessage = message.toLowerCase();
     const changed = new Set(collectChangedFiles(fileTree).map((file) => file.id));
@@ -1217,7 +877,7 @@ export default function WorkspaceClient() {
       setApiState("connected");
       await loadWorkspace(true);
     } catch {
-      setApiState("preview");
+      setApiState("unavailable");
     } finally {
       setBusyAction(null);
     }
@@ -1382,85 +1042,33 @@ export default function WorkspaceClient() {
     }
   }
 
-  async function executePython(run: ApprovedPythonRun) {
-    const runEventId = `python-run-${Date.now()}`;
-    setBottomPanel("terminal");
-    setExecutionState("running");
-    setExecutionResult(null);
-    setTerminalLines(executionTerminalLines(run));
-    setTimeline((current) => [
-      ...current.slice(-7),
-      {
-        id: runEventId,
-        title: "Python sandbox running",
-        detail: `Executing ${run.execution.entrypoint} with network and host filesystem access disabled`,
-        time: nowTime(),
-        state: "active",
-      },
-    ]);
-    try {
-      const rawResult = await runPythonSandbox({
-        files: run.files.map(({ path, content }) => ({ path, content })),
-        entrypoint: run.execution.entrypoint,
-        args: run.execution.args ?? [],
-        timeoutMs: run.execution.timeoutMs ?? 5_000,
-      });
-      const result = normalizeExecutionResult(rawResult);
-      setExecutionResult(result);
-      setExecutionState(result.exitCode === 0 && !result.timedOut ? "complete" : "failed");
-      setTerminalLines(executionTerminalLines(run, result));
-      setTimeline((current) => current.map((item) => item.id === runEventId
-        ? {
-            ...item,
-            title: result.exitCode === 0 && !result.timedOut ? "Python run completed" : "Python run failed",
-            detail: result.timedOut
-              ? `Execution stopped after ${result.durationMs ?? run.execution.timeoutMs ?? 5_000} ms`
-              : `Exit ${result.exitCode ?? "unknown"} · ${result.durationMs ?? 0} ms`,
-            time: nowTime(),
-            state: "complete",
-          }
-        : item));
-      showNotice(result.exitCode === 0 && !result.timedOut ? "Python run completed" : "Python run finished with an error");
-    } catch (error) {
-      const result: PythonExecutionResult = {
-        stdout: "",
-        stderr: error instanceof Error ? error.message : "The Python sandbox could not start.",
-        exitCode: null,
-        timedOut: false,
-      };
-      setExecutionResult(result);
-      setExecutionState("failed");
-      setTerminalLines(executionTerminalLines(run, result));
-      setTimeline((current) => current.map((item) => item.id === runEventId
-        ? {
-            ...item,
-            title: "Python sandbox failed",
-            detail: result.stderr,
-            time: nowTime(),
-            state: "complete",
-          }
-        : item));
-      showNotice("Python sandbox failed to start");
-    }
-  }
-
   async function approvePythonProposal() {
     if (!pendingProposal) return;
+    if (!localGitConnected) {
+      setTerminalLines((current) => [
+        ...current.slice(-12),
+        { type: "error", text: " Repository changes require a running local execution companion." },
+      ]);
+      showNotice("Start the local execution companion before applying files");
+      return;
+    }
     const files = normalizePythonFiles(pendingProposal.artifacts);
     if (!files.length) {
       showNotice("This proposal has no safe Python files to create");
       return;
     }
-    if (!proposalEntrypoint) {
+    if (pendingProposal.execution && !proposalEntrypoint) {
       showNotice("The proposed entrypoint is not one of the reviewed Python files");
       return;
     }
-    const entrypoint = proposalEntrypoint;
-    const execution: PythonExecutionRequest = {
-      entrypoint,
-      args: proposalArgs ?? [],
-      timeoutMs: proposalTimeoutMs,
-    };
+    const execution: PythonExecutionRequest | null = pendingProposal.execution && proposalEntrypoint
+      ? {
+          entrypoint: proposalEntrypoint,
+          command: pendingProposal.execution.command,
+          args: proposalArgs ?? [],
+          timeoutMs: proposalTimeoutMs,
+        }
+      : null;
     if (localGitConnected) {
       setExecutionState("running");
       setBottomPanel("terminal");
@@ -1475,8 +1083,26 @@ export default function WorkspaceClient() {
         const writeData = (await writeResponse.json()) as { ok?: boolean; error?: string };
         if (!writeResponse.ok || !writeData.ok) throw new Error(writeData.error || "Writing repository files failed.");
 
+        if (!execution) {
+          setExecutionState("complete");
+          setPendingProposal(null);
+          setInspectorOpen(false);
+          await refreshLocalGit(true);
+          showNotice(`${files.length} repository file${files.length === 1 ? "" : "s"} applied`);
+          return;
+        }
+
         const quotedArgs = (execution.args ?? []).map((argument) => JSON.stringify(argument)).join(" ");
-        const command = execution.command?.trim() || `python3 ${JSON.stringify(execution.entrypoint)}${quotedArgs ? ` ${quotedArgs}` : ""}`;
+        const artifact = files.find((file) => file.path === execution.entrypoint);
+        const defaultCommand = artifact?.language === "python" || execution.entrypoint.endsWith(".py")
+          ? `python3 ${JSON.stringify(execution.entrypoint)}${quotedArgs ? ` ${quotedArgs}` : ""}`
+          : artifact?.language === "javascript" || /\.[cm]?js$/.test(execution.entrypoint)
+            ? `node ${JSON.stringify(execution.entrypoint)}${quotedArgs ? ` ${quotedArgs}` : ""}`
+            : artifact?.language === "typescript" || /\.[cm]?tsx?$/.test(execution.entrypoint)
+              ? `npx tsx ${JSON.stringify(execution.entrypoint)}${quotedArgs ? ` ${quotedArgs}` : ""}`
+              : "";
+        const command = execution.command?.trim() || defaultCommand;
+        if (!command) throw new Error("The proposal must include an explicit verification command for this language.");
         const executeInput = { command, cwd: ".", timeoutMs: execution.timeoutMs ?? 5_000 };
         const executeToken = await getCompanionApproval("terminal.execute", executeInput);
         const executeResponse = await fetch(`${LOCAL_GIT_COMPANION}/terminal/execute`, {
@@ -1507,47 +1133,14 @@ export default function WorkspaceClient() {
       }
     }
 
-    if (files.some((file) => file.language !== "python" || !file.path.endsWith(".py"))) {
-      showNotice("A running execution companion is required to apply non-Python files");
-      return;
-    }
-    const mergedFiles = new Map(localPythonFiles.map((file) => [file.path, file]));
-    files.forEach((file) => mergedFiles.set(file.path, file));
-    const browserWorkspaceFiles = normalizePythonFiles(Array.from(mergedFiles.values()));
-    if (browserWorkspaceFiles.length !== mergedFiles.size) {
-      showNotice("The combined browser workspace exceeds 8 files or 120 KB · remove a saved file before approving");
-      return;
-    }
-    const run = { files: browserWorkspaceFiles, execution };
-
-    setLocalPythonFiles(browserWorkspaceFiles);
-    setFolders((current) => new Set(current).add("__generated_python__"));
-    setAcceptedFiles((current) => new Set([...current, ...files.map((file) => file.path)]));
-    setSelectedGeneratedFile(entrypoint);
-    setActiveFile(entrypoint);
-    setViewMode("code");
-    setApprovedPythonRun(run);
-    setPendingProposal(null);
-    setInspectorOpen(false);
-    setTimeline((current) => [
-      ...current.slice(-7),
-      {
-        id: `python-approved-${Date.now()}`,
-        title: "Python proposal approved",
-        detail: `${files.length} file${files.length === 1 ? "" : "s"} saved in this browser workspace`,
-        time: nowTime(),
-        state: "complete",
-      },
-    ]);
-    await executePython(run);
   }
 
   function rejectPythonProposal() {
     if (!pendingProposal) return;
     const rejectedPaths = new Set(normalizePythonFiles(pendingProposal.artifacts).map((file) => file.path));
     setPendingProposal(null);
-    if (rejectedPaths.has(activeFile) && !localPythonFiles.some((file) => file.path === activeFile)) {
-      const fallbackFile = serverDiff?.file || changedFiles[0]?.id || INITIAL_FILE_TREE[0].id;
+    if (rejectedPaths.has(activeFile)) {
+      const fallbackFile = serverDiff?.file || changedFiles[0]?.id || flattenFileTree(fileTree)[0] || "";
       setActiveFile(fallbackFile);
       setSelectedGeneratedFile(null);
     }
@@ -1587,25 +1180,43 @@ export default function WorkspaceClient() {
 
     try {
       const workspaceContextFiles = await collectRepositoryContext(message);
+      const contextCharacters = workspaceContextFiles.reduce((total, file) => total + file.content.length, 0);
+      setContext({
+        strategy: "request-scoped repository file selection",
+        indexedFiles: flattenFileTree(fileTree).length,
+        indexedSymbols: 0,
+        snapshot: workspace.headSha || "unavailable",
+        tokenBudget: { used: Math.ceil(contextCharacters / 4), limit: 0 },
+        sources: workspaceContextFiles.map((file) => file.path),
+        freshness: `Assembled from the local companion at ${nowTime()}.`,
+      });
       const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message,
-          taskId: workspace.taskId,
+          ...(workspace.taskId ? { taskId: workspace.taskId } : {}),
           workspaceId: workspace.id,
           workspaceFiles: workspaceContextFiles,
+          workspace: {
+            repository: workspace.repository,
+            ...(workspace.repositoryPath ? { path: workspace.repositoryPath } : {}),
+            ...(workspace.branch ? { branch: workspace.branch } : {}),
+            ...(workspace.headSha ? { headSha: workspace.headSha } : {}),
+          },
           idempotencyKey: `agent-${Date.now()}`,
         }),
       });
-      if (!response.ok) throw new Error("Agent unavailable");
+      if (!response.ok) {
+        const failure = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+        throw new Error(failure?.error?.message || `Agent request failed with status ${response.status}.`);
+      }
       const data = (await response.json()) as AgentApiResponse;
       if (data.model) {
         agentModelOverride.current = data.model;
         setWorkspace((current) => ({ ...current, model: data.model as string }));
       }
       if (data.output) {
-        setProposalOrigin({ mode: data.mode ?? "unknown", diagnostic: data.liveDiagnostic });
         const draftFiles = normalizePythonFiles(data.output.artifacts);
         if (draftFiles.length) {
           setPendingProposal(data.output);
@@ -1616,8 +1227,8 @@ export default function WorkspaceClient() {
         } else {
           const rejectedArtifacts = Array.isArray(data.output.artifacts) && data.output.artifacts.length > 0;
           setPendingProposal(null);
-          if (draftPythonFiles.some((file) => file.path === activeFile) && !localPythonFiles.some((file) => file.path === activeFile)) {
-            setActiveFile(serverDiff?.file || changedFiles[0]?.id || INITIAL_FILE_TREE[0].id);
+          if (draftPythonFiles.some((file) => file.path === activeFile)) {
+            setActiveFile(serverDiff?.file || changedFiles[0]?.id || flattenFileTree(fileTree)[0] || "");
             setSelectedGeneratedFile(null);
           }
           setBottomPanel("terminal");
@@ -1626,9 +1237,6 @@ export default function WorkspaceClient() {
             { type: "muted", text: "" },
             { type: "info", text: ` Agent · ${data.output?.summary.replace(/\s+/g, " ")}` },
             ...(data.output?.plan ?? []).map((step, index) => ({ type: "output", text: ` ${index + 1}. ${step}` })),
-            ...(data.mode === "demo" || data.liveDiagnostic
-              ? [{ type: "pending", text: ` ${data.mode === "demo" ? "Fallback response" : "Live model fallback"} · ${data.liveDiagnostic || "demo mode"}` }]
-              : []),
             ...(rejectedArtifacts
               ? [{ type: "error", text: " Proposed artifacts were rejected: paths or size limits did not match the browser sandbox policy." }]
               : []),
@@ -1638,9 +1246,14 @@ export default function WorkspaceClient() {
       setApiState("connected");
       await loadWorkspace(true);
       showNotice(normalizePythonFiles(data.output?.artifacts).length ? "Proposal ready for review" : "Agent response ready");
-    } catch {
-      setApiState("preview");
-      showNotice("Agent request failed · no files were created");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Agent request failed.";
+      setTerminalLines((current) => [
+        ...current.slice(-16),
+        { type: "error", text: ` Agent error · ${message}` },
+        { type: "summary", text: " No proposal was generated and no files were changed." },
+      ]);
+      showNotice(message);
     } finally {
       setBusyAction(null);
     }
@@ -1653,13 +1266,22 @@ export default function WorkspaceClient() {
     }
   }
 
-  const fileLabel = activeFile.split("/").at(-1) ?? activeFile;
+  const fileLabel = activeFile.split("/").at(-1) || "No file selected";
+  const fileLanguage = activeFile.endsWith(".py")
+    ? "Python"
+    : /\.[cm]?tsx?$/.test(activeFile)
+      ? "TypeScript"
+      : /\.[cm]?jsx?$/.test(activeFile)
+        ? "JavaScript"
+        : activeFile
+          ? "Text"
+          : "No file";
   const apiLabel =
     apiState === "connected"
       ? "Orchestrator online"
       : apiState === "connecting"
         ? "Connecting"
-        : "Local preview";
+        : "Orchestrator unavailable";
   const approvalCommand = typeof activeApproval?.details.command === "string"
     ? activeApproval.details.command
     : activeApproval?.action === "apply_patch"
@@ -1694,10 +1316,10 @@ export default function WorkspaceClient() {
             <span className="crumb-slash">/</span>
             <strong>{workspace.repository.split("/").at(-1)}</strong>
           </div>
-          <button className="branch-pill" type="button" aria-label={`Current branch ${workspace.branch}`}>
+          <span className="branch-pill" aria-label={`Current branch ${workspace.branch || "not connected"}`}>
             <span aria-hidden="true">⑂</span>
-            {workspace.branch.replace("agent/", "")}
-          </button>
+            {workspace.branch ? workspace.branch.replace("agent/", "") : "not connected"}
+          </span>
         </div>
 
         <div className="task-breadcrumb" aria-label="Active task">
@@ -1720,7 +1342,6 @@ export default function WorkspaceClient() {
           >
             ◫
           </button>
-          <button className="avatar-button" type="button" aria-label="Open account menu">TB</button>
         </div>
       </header>
 
@@ -1741,9 +1362,7 @@ export default function WorkspaceClient() {
           <div className="panel-title-row">
             <span className="eyebrow">Explorer</span>
             <div className="panel-actions">
-              <button type="button" aria-label="Create file">＋</button>
-              <button type="button" aria-label="Refresh files" onClick={() => void loadWorkspace(true)}>↻</button>
-              <button type="button" aria-label="More explorer actions">•••</button>
+              <button type="button" aria-label="Refresh files" onClick={() => void refreshLocalGit(false)}>↻</button>
             </div>
           </div>
 
@@ -1754,6 +1373,7 @@ export default function WorkspaceClient() {
           </button>
 
           <nav className="file-tree" aria-label="Repository files" data-testid="file-tree">
+            {!displayFileTree.length && <div className="proposal-empty">Connect the local companion to load repository files.</div>}
             {displayFileTree.map((node) => (
               <TreeNodeView
                 key={node.id}
@@ -1771,21 +1391,16 @@ export default function WorkspaceClient() {
             <div className="scope-heading">
               <span className="scope-icon" aria-hidden="true">◇</span>
               <div>
-                <strong>Task worktree</strong>
+                <strong>Repository workspace</strong>
                 <span>{workspace.runner}</span>
               </div>
             </div>
             <div className="scope-meter"><span /></div>
             <div className="scope-stats">
               <span>{workspace.network}</span>
-              <span>task scoped</span>
+              <span>workspace scoped</span>
             </div>
           </section>
-          <button className="explorer-footer" type="button">
-            <span aria-hidden="true">⌘</span>
-            <span>Command palette</span>
-            <kbd>⌘ K</kbd>
-          </button>
         </aside>
 
         <main className="workbench" aria-label="Code workspace">
@@ -1822,7 +1437,7 @@ export default function WorkspaceClient() {
                   onClick={() => setViewMode("diff")}
                   data-testid="diff-view-tab"
                 >
-                  Diff <span className="tiny-count">3</span>
+                  Diff <span className="tiny-count">{changedFiles.length}</span>
                 </button>
               </div>
             </div>
@@ -1841,8 +1456,7 @@ export default function WorkspaceClient() {
                 <span className="addition-text">+{activeDiffStats.additions}</span>
                 <span className="deletion-text">−{activeDiffStats.deletions}</span>
                 <span className="reviewed-dot" aria-hidden="true" />
-                {selectedDraftFile ? "review required" : "reviewed"}
-                <button type="button" aria-label="More editor actions">•••</button>
+                {selectedDraftFile ? "review required" : activeFile ? "repository state" : "no file selected"}
               </div>
             </div>
 
@@ -1862,26 +1476,25 @@ export default function WorkspaceClient() {
                 </div>
               ) : (
                 <div className="plain-code" role="table" aria-label={`Code for ${fileLabel}`}>
-                  {currentCode.map((line, index) => (
+                  {currentCode.length ? currentCode.map((line, index) => (
                     <div className="code-line" role="row" key={`${index}-${line}`}>
                       <span className="line-number" role="cell">{index + 1}</span>
                       <code role="cell">{line || " "}</code>
                     </div>
-                  ))}
+                  )) : <div className="proposal-empty">Select a repository file to load its real contents.</div>}
                 </div>
               )}
             </div>
 
             <div className="editor-statusbar">
-              <span><b>Ln 16, Col 5</b></span>
-              <span>Spaces: 2</span>
+              <span><b>{currentCode.length.toLocaleString()} lines</b></span>
               <span>UTF-8</span>
-              <span>{activeFile.endsWith(".py") ? "Python" : "TypeScript"}</span>
+              <span>{fileLanguage}</span>
               <span className="status-spacer" />
               {selectedDraftFile ? (
                 <span className="draft-status"><i aria-hidden="true">◌</i> draft only · no file created</span>
               ) : (
-                <span className="safe-status"><i aria-hidden="true">✓</i> policy checked</span>
+                <span className="safe-status"><i aria-hidden="true">{localGitConnected ? "✓" : "○"}</i> {localGitConnected ? "read from companion" : "no file loaded"}</span>
               )}
             </div>
           </section>
@@ -1897,8 +1510,6 @@ export default function WorkspaceClient() {
               >
                 Terminal
               </button>
-              <button type="button" role="tab" aria-selected="false">Problems <span>0</span></button>
-              <button type="button" role="tab" aria-selected="false">Tests <span className="pass-count">9</span></button>
               <button
                 type="button"
                 role="tab"
@@ -1906,11 +1517,10 @@ export default function WorkspaceClient() {
                 className={bottomPanel === "git" ? "active" : ""}
                 onClick={() => setBottomPanel("git")}
               >
-                Git review <span>3</span>
+                Git review <span>{changedFiles.length}</span>
               </button>
               <span className="lower-tabs-spacer" />
-              <button type="button" aria-label="Clear terminal">Clear</button>
-              <button type="button" aria-label="Maximize bottom panel">⌃</button>
+              <button type="button" aria-label="Clear terminal" onClick={() => setTerminalLines([])}>Clear</button>
             </div>
 
             <div className={`lower-content ${bottomPanel === "git" ? "git-focused" : ""}`}>
@@ -1923,17 +1533,7 @@ export default function WorkspaceClient() {
                         exit {executionResult.exitCode ?? "—"}
                       </span>
                     )}
-                    {approvedPythonRun && (
-                      <button
-                        type="button"
-                        onClick={() => void executePython(approvedPythonRun)}
-                        disabled={executionState === "running"}
-                        data-testid="run-python-again"
-                      >
-                        {executionState === "running" ? "Running…" : "Run again"}
-                      </button>
-                    )}
-                    <span className="terminal-sandbox"><i aria-hidden="true" /> {localGitConnected ? "Container workspace" : "Python sandbox"}</span>
+                    <span className="terminal-sandbox"><i aria-hidden="true" /> {localGitConnected ? "Container workspace" : "Companion disconnected"}</span>
                   </div>
                 </div>
                 <div className="terminal-lines">
@@ -2015,9 +1615,9 @@ export default function WorkspaceClient() {
                 rows={2}
               />
               <div className="composer-options">
-                <button type="button"><span className="mode-dot" /> Plan & execute <b aria-hidden="true">⌄</b></button>
-                <button type="button">{workspace.model} <b aria-hidden="true">⌄</b></button>
-                <span className="composer-context">{context.sources.length} sources · {contextPercent}% context</span>
+                <span><span className="mode-dot" /> Plan & propose</span>
+                <span>{workspace.model}</span>
+                <span className="composer-context">{context.sources.length} sources · {context.tokenBudget.used.toLocaleString()} estimated tokens</span>
                 <span className="composer-spacer" />
                 <span className="send-hint"><kbd>⌘</kbd><kbd>↵</kbd></span>
                 <button
@@ -2043,7 +1643,6 @@ export default function WorkspaceClient() {
                 <span className="run-live"><i aria-hidden="true" /> {workspace.taskStatus.replaceAll("_", " ")}</span>
               </div>
             </div>
-            <button type="button" aria-label="More run actions">•••</button>
           </div>
 
           <div className="run-progress" aria-label={`Task progress: ${workspace.taskProgress}%`}>
@@ -2072,13 +1671,6 @@ export default function WorkspaceClient() {
                 </div>
                 <span className="risk-pill">{pendingProposal.riskLevel ?? "R1"} · local</span>
               </div>
-
-              {(proposalOrigin.mode === "demo" || proposalOrigin.diagnostic) && (
-                <div className="proposal-origin-warning" role="note">
-                  <strong>{proposalOrigin.mode === "demo" ? "Fallback proposal" : "Live model fallback"}</strong>
-                  <span>{proposalOrigin.diagnostic || "This response came from demo mode, not the configured live coding model."}</span>
-                </div>
-              )}
 
               <p className="proposal-summary">{pendingProposal.summary}</p>
               <div className="draft-notice">
@@ -2117,9 +1709,9 @@ export default function WorkspaceClient() {
               )}
 
               <dl className="proposal-execution">
-                <div><dt>Execution</dt><dd className={proposalEntrypoint ? "" : "invalid"}>{pendingProposal.execution?.command || proposalEntrypoint || "Invalid or missing"}</dd></div>
-                <div><dt>Timeout</dt><dd>{proposalTimeoutMs} ms</dd></div>
-                <div><dt>Arguments</dt><dd className={proposalArgs === null ? "invalid" : ""}>{proposalArgs === null ? "Invalid limits" : `${proposalArgs.length} supplied`}</dd></div>
+                <div><dt>Execution</dt><dd className={pendingProposal.execution && !proposalEntrypoint ? "invalid" : ""}>{pendingProposal.execution ? pendingProposal.execution.command || proposalEntrypoint || "Invalid or missing" : "Apply files only"}</dd></div>
+                {pendingProposal.execution && <div><dt>Timeout</dt><dd>{proposalTimeoutMs} ms</dd></div>}
+                {pendingProposal.execution && <div><dt>Arguments</dt><dd className={proposalArgs === null ? "invalid" : ""}>{proposalArgs === null ? "Invalid limits" : `${proposalArgs.length} supplied`}</dd></div>}
               </dl>
 
               <div className="proposal-actions">
@@ -2136,10 +1728,10 @@ export default function WorkspaceClient() {
                   className="proposal-approve"
                   type="button"
                   onClick={() => void approvePythonProposal()}
-                  disabled={!draftPythonFiles.length || !proposalEntrypoint || proposalArgs === null || executionState === "running"}
+                  disabled={!localGitConnected || !draftPythonFiles.length || (Boolean(pendingProposal.execution) && !proposalEntrypoint) || proposalArgs === null || executionState === "running"}
                   data-testid="approve-create-run"
                 >
-                  Approve, create &amp; run <span aria-hidden="true">→</span>
+                  {pendingProposal.execution ? "Approve, apply & run" : "Approve & apply files"} <span aria-hidden="true">→</span>
                 </button>
               </div>
             </section>
@@ -2231,6 +1823,7 @@ export default function WorkspaceClient() {
               <span className="elapsed">{timeline.length} events</span>
             </div>
             <ol className="timeline-list">
+              {!timeline.length && <li className="queued"><div><strong>No activity yet</strong><p>Events appear only after a real workspace or agent action.</p></div></li>}
               {timeline.map((event) => (
                 <li className={event.state} key={event.id}>
                   <span className="timeline-node" aria-hidden="true">
@@ -2260,27 +1853,21 @@ export default function WorkspaceClient() {
             <div className="token-card">
               <div className="token-copy">
                 <strong>{context.tokenBudget.used.toLocaleString()}</strong>
-                <span>of {Math.round(context.tokenBudget.limit / 1000)}k input tokens</span>
-                <b>{contextPercent}%</b>
-              </div>
-              <div className="token-meter"><span style={{ width: `${contextPercent}%` }} /></div>
-              <div className="token-legend">
-                <span><i className="policy-color" /> policy</span>
-                <span><i className="source-color" /> sources</span>
-                <span><i className="memory-color" /> memory</span>
+                <span>estimated source tokens in the latest request</span>
               </div>
             </div>
 
             <div className="source-heading">
               <span>Included sources</span>
-              <button type="button">View manifest</button>
+              <span>{context.sources.length}</span>
             </div>
             <ul className="source-list">
+              {!contextSources.length && <li><div><strong>No sources selected</strong><span>Send a prompt while the companion is connected.</span></div></li>}
               {contextSources.map((source) => (
                 <li key={source.label}>
                   <span className="source-file-icon">{source.label.endsWith(".md") ? "MD" : source.label.split(".").at(-1)?.toUpperCase().slice(0, 2) || "F"}</span>
                   <div><strong>{source.label}</strong><span>{source.detail}</span></div>
-                  <b>{source.score}</b>
+                  <b>included</b>
                 </li>
               ))}
             </ul>
@@ -2301,7 +1888,7 @@ export default function WorkspaceClient() {
             >
               {busyAction === "run_checks" ? "Queueing…" : "Run checks"}
             </button>
-            <button className="stop-action" type="button" onClick={() => void postWorkspaceAction("cancel", { taskId: workspace.taskId, workspaceId: workspace.id })}>
+            <button className="stop-action" type="button" disabled={!workspace.taskId} onClick={() => void postWorkspaceAction("cancel", { taskId: workspace.taskId, workspaceId: workspace.id })}>
               Stop run
             </button>
           </div>

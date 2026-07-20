@@ -8,7 +8,7 @@ import {
   workspaceActionSchema,
 } from "@/lib/api-contract";
 import {
-  DEMO_WORKSPACE_ID,
+  DEFAULT_WORKSPACE_ID,
   claimIdempotency,
   canonicalRequest,
   digest,
@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 
 function requestedWorkspaceId(request: Request): string {
   return new URL(request.url).searchParams.get("workspaceId")?.trim() ||
-    DEMO_WORKSPACE_ID;
+    DEFAULT_WORKSPACE_ID;
 }
 
 function parseEventQuery(request: Request): {
