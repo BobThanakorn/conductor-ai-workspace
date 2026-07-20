@@ -14,6 +14,8 @@ services:
     ports:
       - "127.0.0.1:${CONDUCTOR_WEB_PORT:-3000}:3000"
     environment:
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "true"
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true"
       AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-https://ai-environment-resource.services.ai.azure.com}
       AZURE_AI_FOUNDRY_API_KEY: ${AZURE_AI_FOUNDRY_API_KEY:-}
       AZURE_AI_FOUNDRY_MODEL: ${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}

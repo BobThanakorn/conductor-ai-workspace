@@ -110,6 +110,8 @@ credential values.
 For Docker secrets, copy the matching `.example` file without the `.example`
 suffix and replace its single line with the key. Docker mounts it under
 `/run/secrets`; the entrypoint loads it only into the relevant service process.
+The local Wrangler runtime imports that server process environment as Worker
+bindings; provider credentials remain server-side and are never returned to the browser.
 
 ## Try it
 
