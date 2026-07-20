@@ -1465,7 +1465,7 @@ export default function WorkspaceClient() {
           <button
             type="button"
             className={inspectorOpen ? "active" : ""}
-            onClick={() => setInspectorOpen(true)}
+            onClick={() => { setAgentPanelView("chat"); setInspectorOpen(true); }}
             aria-label="Agent"
             title="Agent"
           >✦</button>
