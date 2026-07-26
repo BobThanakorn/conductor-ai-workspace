@@ -12,3 +12,40 @@
 .portal-workspace { width: 300px; flex: 0 0 300px; padding: 20px 18px; border-left: 1px solid #e4e3da; background: #fffefb; }.workspace-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #efeee8; color: #5e665b; }.workspace-heading div { display: flex; gap: 7px; }.workspace-heading button { border: 0; color: #969b91; background: transparent; cursor: pointer; font-size: 18px; }.workspace-section-label { display: flex; justify-content: space-between; margin: 22px 0 10px; color: #9da197; font-size: 10px; font-weight: 800; letter-spacing: .12em; }.workspace-file { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 3px; border: 0; color: #686e65; background: transparent; text-align: left; cursor: pointer; }.workspace-file:hover { color: #147a3b; }.workspace-file span { color: #969c90; }.workspace-file strong { flex: 1; font-size: 13px; font-weight: 500; }.workspace-file small { color: #b1b2aa; }.workspace-divider { height: 1px; margin: 24px 0; background: #ecebe4; }.run-card { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid #d5e9d8; border-radius: 10px; background: #f4fbf4; }.run-dot { width: 9px; height: 9px; border-radius: 50%; background: #2b9a50; }.run-card strong, .run-card small { display: block; }.run-card strong { color: #4e7358; font-size: 12px; }.run-card small { margin-top: 4px; color: #929c8f; font-size: 10px; }.open-old-workspace, .workspace-reopen { width: 100%; margin-top: 20px; padding: 11px; border: 1px solid #d6e7d8; border-radius: 9px; color: #187a3c; background: #f4fbf4; cursor: pointer; font-size: 11px; }.workspace-reopen { position: fixed; top: 95px; right: 18px; z-index: 5; width: auto; }.portal-notice { position: fixed; right: 24px; bottom: 22px; z-index: 10; padding: 11px 15px; border-radius: 10px; color: white; background: #24462d; box-shadow: 0 8px 25px #17351d44; font-size: 12px; }
 @media (max-width: 900px) { .portal-sidebar { width: 230px; }.portal-workspace { width: 250px; flex-basis: 250px; }.chat-column { padding: 30px 4vw 20px; }.portal-header { padding: 0 16px; }.portal-tabs button { padding: 9px 12px; } }
 @media (max-width: 700px) { .portal-sidebar { width: 62px; padding: 18px 8px; }.portal-sidebar .portal-label, .portal-sidebar .project-card span:not(.project-avatar), .portal-sidebar .project-card b, .portal-sidebar .new-chat:not(:has(span)), .portal-sidebar .sidebar-link span, .portal-sidebar .recent-chat span, .portal-sidebar .privacy-line, .portal-sidebar .profile-card span:not(.profile-avatar), .portal-sidebar .profile-card b { display: none; }.project-card { justify-content: center; padding: 8px; }.new-chat { justify-content: center; padding: 11px; }.new-chat { font-size: 0; }.new-chat span { font-size: 23px; }.sidebar-link { justify-content: center; padding: 12px 0; font-size: 20px; }.recent-chat { justify-content: center; padding: 12px 0; }.recent-chat i { margin: 0; }.profile-card { justify-content: center; padding-top: 14px; }.portal-workspace { display: none; }.portal-header { min-height: 60px; }.header-status { display: none; }.portal-tabs { margin: auto; }.portal-message p { font-size: 14px; }.composer-toolbar { overflow-x: auto; }.composer-toolbar button { white-space: nowrap; }.portal-model { display: none; } }
+
+/* Chat-first portal visual language: intentionally separate from the legacy code workspace. */
+.portal-shell { background: #f7f5ee; }
+.portal-sidebar { width: 365px; padding: 31px 14px 16px; background: #fffefa; }
+.portal-label { padding: 0 10px; font-size: 12px; letter-spacing: .14em; }
+.project-card { margin-top: 12px; padding: 13px 14px; border-radius: 16px; }
+.project-avatar { width: 42px; height: 42px; flex-basis: 42px; border-radius: 12px; font-size: 15px; background: #147b3d; }
+.project-card strong { font-size: 16px; }
+.project-card small { font-size: 13px; }
+.new-chat { margin: 21px 0 31px; padding: 14px 18px; border-radius: 13px; font-size: 16px; }
+.sidebar-link { padding: 14px 10px; font-size: 16px; }
+.recent-label { margin-top: 29px; }
+.privacy-line { font-size: 13px; }
+.recent-chat { padding: 13px 10px; }
+.recent-chat strong { font-size: 14px; }
+.recent-chat small { font-size: 12px; }
+.portal-header { min-height: 74px; padding: 0 34px; }
+.portal-tabs button { padding: 12px 22px; font-size: 16px; }
+.header-status { font-size: 15px; }
+.active-users { padding: 10px 15px; }
+.portal-workspace { width: 335px; flex-basis: 335px; padding: 24px 20px; }
+.workspace-heading { padding-bottom: 22px; font-size: 15px; }
+.workspace-file { padding: 14px 3px; }
+.workspace-file strong { font-size: 15px; }
+.chat-column { max-width: none; padding: 54px 5vw 24px; }
+.assistant-heading, .message-list { max-width: 830px; }
+.assistant-heading { margin-bottom: 34px; }
+.assistant-heading strong { font-size: 17px; }
+.assistant-heading small { font-size: 13px; }
+.portal-message { margin-bottom: 34px; }
+.portal-message p { font-size: 17px; }
+.portal-composer { max-width: 900px; margin-top: 34px; padding: 14px 17px 12px; border-radius: 20px; }
+.portal-composer textarea { font-size: 16px; }
+.composer-toolbar button { padding: 9px 13px; font-size: 12px; }
+.portal-model { font-size: 12px; }
+.sandbox-note { font-size: 12px; }
+@media (max-width: 1100px) { .portal-sidebar { width: 290px; }.portal-workspace { width: 290px; flex-basis: 290px; } }

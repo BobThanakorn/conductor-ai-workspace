@@ -62,7 +62,7 @@ export default function PortalPage() {
         <div className="portal-label">PROJECT</div>
         <button className="project-card" type="button">
           <span className="project-avatar">AE</span>
-          <span><strong>AI Environment</strong><small>Member · 2 teams</small></span>
+          <span><strong>AI Engineering</strong><small>Member · 2 teams</small></span>
           <b>⌄</b>
         </button>
         <button className="new-chat" type="button" onClick={newChat}><span>＋</span> New chat</button>
@@ -71,9 +71,9 @@ export default function PortalPage() {
         <button className="sidebar-link" type="button" onClick={() => setNotice("Project settings")}>☷ <span>Settings</span></button>
         <div className="portal-label recent-label">RECENT CHATS</div>
         <div className="privacy-line">⌕ Private to you</div>
-        <button className="recent-chat selected" type="button"><i /> <span><strong>Workspace review</strong><small>Created a coding-agent session</small></span></button>
-        <button className="recent-chat" type="button"><i /> <span><strong>Python task manager</strong><small>Agent proposal ready for review</small></span></button>
-        <button className="recent-chat" type="button"><i /> <span><strong>Model comparison</strong><small>Compare provider latency</small></span></button>
+        <button className="recent-chat selected" type="button"><i /> <span><strong>My week at a glance</strong><small>Created /workspace/hello.txt</small></span></button>
+        <button className="recent-chat" type="button"><i /> <span><strong>Vendor email translation</strong><small>Done · translation ready</small></span></button>
+        <button className="recent-chat" type="button"><i /> <span><strong>Workspace review</strong><small>Agent proposal ready for review</small></span></button>
         <div className="sidebar-spacer" />
         <button className="profile-card" type="button"><span className="profile-avatar">ธ</span><span><strong>ผู้ใช้ Conductor</strong><small>Project member</small></span><b>›</b></button>
       </aside>
@@ -94,7 +94,7 @@ export default function PortalPage() {
               <div className="tab-empty"><span>{activeTab === "team" ? "♧" : "▣"}</span><h1>{activeTab === "team" ? "Team workspace" : "Project overview"}</h1><p>ส่วนนี้แยกจาก Code Workspace เดิม และพร้อมต่อยอดระบบสมาชิก/โปรเจกต์จริง</p></div>
             ) : (
               <>
-                <div className="assistant-heading"><span className="assistant-avatar">AI</span><div><strong>Conductor Assistant</strong><small>Local workspace agent</small></div></div>
+                <div className="assistant-heading"><span className="assistant-avatar">AI</span><div><strong>DTS Assistant</strong><small>Your personal workspace assistant</small></div></div>
                 <div className="message-list">
                   {messages.map((message) => (
                     <article className={`portal-message ${message.role}`} key={message.id}>
@@ -105,7 +105,7 @@ export default function PortalPage() {
                   {busy && <div className="typing"><span /> <span /> <span /> Agent กำลังประมวลผล…</div>}
                 </div>
                 <form className="portal-composer" onSubmit={sendMessage}>
-                  <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Message the Conductor assistant… (Shift+Enter for newline)" rows={2} aria-label="Message the Conductor assistant" />
+                  <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Message the DTS assistant… (Shift+Enter for newline)" rows={2} aria-label="Message the DTS assistant" />
                   <div className="composer-toolbar">
                     <button type="button" onClick={() => setNotice("แนบไฟล์จะเชื่อมกับ repository context ในขั้นถัดไป")}>＋ Attach</button>
                     <button type="button" onClick={() => setNotice("Skills manager เปิดจากเมนู Connectors & skills")}>♧ Skills</button>
