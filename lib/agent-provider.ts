@@ -10,6 +10,9 @@ export type AgentEnvironmentBindings = {
   OPENAI_BASE_URL?: string;
   OPENAI_AGENT_MODEL?: string;
   OPENAI_MODEL?: string;
+  VLLM_BASE_URL?: string;
+  VLLM_API_KEY?: string;
+  VLLM_MODEL?: string;
   CONDUCTOR_MODEL_OPTIONS?: string;
   MCP_GATEWAY_URL?: string;
 };
@@ -51,6 +54,15 @@ function isPrivateNetworkHost(hostname: string): boolean {
     || (octets[0] === 192 && octets[1] === 168);
 }
 
+function normalizeOpenAICompatibleBaseUrl(value: string): string {
+  const url = new URL(value);
+  const localHttp = url.protocol === "http:" && isPrivateNetworkHost(url.hostname);
+  if ((!localHttp && url.protocol !== "https:") || url.username || url.password || url.hash || url.search) {
+    throw new Error("OpenAI-compatible endpoint must use HTTPS or a trusted private-network model host.");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
 export function normalizeAzureFoundryBaseUrl(endpoint: string): string {
   const url = new URL(endpoint);
   const host = url.hostname.toLowerCase();
@@ -85,14 +97,7 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
   if (openAIKey) {
     const configuredBaseUrl = configured(bindings.OPENAI_BASE_URL);
     let baseURL: string | undefined;
-    if (configuredBaseUrl) {
-      const url = new URL(configuredBaseUrl);
-      const localHttp = url.protocol === "http:" && isPrivateNetworkHost(url.hostname);
-      if ((!localHttp && url.protocol !== "https:") || url.username || url.password || url.hash) {
-        throw new Error("OPENAI_BASE_URL must use HTTPS or a trusted private-network model host.");
-      }
-      baseURL = url.toString().replace(/\/$/, "");
-    }
+    if (configuredBaseUrl) baseURL = normalizeOpenAICompatibleBaseUrl(configuredBaseUrl);
     return {
       provider: "openai",
       apiKey: openAIKey,
@@ -107,6 +112,25 @@ export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): A
   throw new AgentProviderConfigurationError();
 }
 
+export function resolveAgentRuntimeConfigForModel(
+  bindings: AgentEnvironmentBindings,
+  requestedModel?: string,
+): AgentRuntimeConfig {
+  const baseRuntime = resolveAgentRuntimeConfig(bindings);
+  const model = configured(requestedModel) ?? baseRuntime.model;
+  const vllmModel = configured(bindings.VLLM_MODEL);
+  const vllmBaseUrl = configured(bindings.VLLM_BASE_URL);
+  if (vllmModel && vllmBaseUrl && model === vllmModel) {
+    return {
+      provider: "openai",
+      apiKey: configured(bindings.VLLM_API_KEY) ?? "EMPTY",
+      baseURL: normalizeOpenAICompatibleBaseUrl(vllmBaseUrl),
+      model: vllmModel,
+    };
+  }
+  return { ...baseRuntime, model };
+}
+
 export function resolveAgentModelOptions(
   bindings: AgentEnvironmentBindings,
   runtime = resolveAgentRuntimeConfig(bindings),
@@ -117,7 +141,10 @@ export function resolveAgentModelOptions(
     .filter(Boolean)
     .filter((value, index, values) => values.indexOf(value) === index)
     .slice(0, 32) ?? [];
-  return [runtime.model, ...configuredOptions].filter(
+  const vllmModel = configured(bindings.VLLM_MODEL);
+  return [runtime.model, vllmModel, ...configuredOptions].filter(
+    (value): value is string => Boolean(value),
+  ).filter(
     (value, index, values) => values.indexOf(value) === index,
   );
 }

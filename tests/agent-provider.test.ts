@@ -7,6 +7,8 @@ import {
   DEFAULT_AZURE_FOUNDRY_ENDPOINT,
   normalizeAzureFoundryBaseUrl,
   resolveAgentRuntimeConfig,
+  resolveAgentRuntimeConfigForModel,
+  resolveAgentModelOptions,
 } from "../lib/agent-provider.ts";
 
 test("prefers the configured Azure Foundry model and normalizes its v1 base URL", () => {
@@ -69,6 +71,28 @@ test("supports an authenticated vLLM endpoint on a private network", () => {
     assert.equal(runtime.baseURL, "http://10.4.93.66:9020/v1");
     assert.equal(runtime.model, "Qwen/Qwen3.6-35B-A3B");
   }
+});
+
+test("routes the selected Qwen model to vLLM while keeping Azure as the default provider", () => {
+  const bindings = {
+    AZURE_AI_FOUNDRY_API_KEY: "azure-key",
+    AZURE_AI_FOUNDRY_MODEL: "gpt-5.1-codex-mini",
+    VLLM_BASE_URL: "http://localhost:9020/v1",
+    VLLM_API_KEY: "EMPTY",
+    VLLM_MODEL: "Qwen/Qwen3.6-35B-A3B",
+    CONDUCTOR_MODEL_OPTIONS: "gpt-5.4-mini",
+  };
+  const options = resolveAgentModelOptions(bindings);
+  assert.deepEqual(options, ["gpt-5.1-codex-mini", "Qwen/Qwen3.6-35B-A3B", "gpt-5.4-mini"]);
+  const azure = resolveAgentRuntimeConfigForModel(bindings, "gpt-5.1-codex-mini");
+  assert.equal(azure.provider, "azure");
+  const vllm = resolveAgentRuntimeConfigForModel(bindings, "Qwen/Qwen3.6-35B-A3B");
+  assert.deepEqual(vllm, {
+    provider: "openai",
+    apiKey: "EMPTY",
+    baseURL: "http://localhost:9020/v1",
+    model: "Qwen/Qwen3.6-35B-A3B",
+  });
 });
 
 test("rejects an unencrypted model endpoint on a public network", () => {

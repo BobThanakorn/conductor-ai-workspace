@@ -49,3 +49,6 @@
 .portal-model { font-size: 12px; }
 .sandbox-note { font-size: 12px; }
 @media (max-width: 1100px) { .portal-sidebar { width: 290px; }.portal-workspace { width: 290px; flex-basis: 290px; } }
+.portal-model-picker { max-width: 210px; padding: 7px 9px; border: 1px solid #e2e0d6; border-radius: 9px; color: #777d72; background: #faf9f3; font: 12px var(--font-geist-mono), monospace; outline: none; }
+.portal-model-picker:focus { border-color: #9bcaa5; box-shadow: 0 0 0 3px #b6ddc033; }
+@media (max-width: 700px) { .portal-model-picker { display: none; } }

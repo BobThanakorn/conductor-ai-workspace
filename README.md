@@ -54,6 +54,22 @@ read/list/search/fetch/query operations. Repository writes, shell commands,
 remote Git publication, and pull requests stay behind Conductor's one-time
 approval flow.
 
+To expose both Azure and a local vLLM model in the model picker, configure both
+providers. The selected Qwen model is routed to vLLM while Azure remains the
+default for the configured GPT model:
+
+```env
+AZURE_AI_FOUNDRY_MODEL=gpt-5.1-codex-mini
+VLLM_BASE_URL=http://host.docker.internal:9020/v1
+VLLM_API_KEY=EMPTY
+VLLM_MODEL=Qwen/Qwen3.6-35B-A3B
+CONDUCTOR_MODEL_OPTIONS=gpt-5.1-codex-mini,Qwen/Qwen3.6-35B-A3B
+```
+
+The vLLM endpoint must be reachable from the web container. Use
+`http://localhost:9020/v1` for host development and
+`http://host.docker.internal:9020/v1` from Docker Desktop.
+
 Open `http://localhost:3000`. Check the execution companion with:
 
 ```bash

@@ -36,6 +36,12 @@ export async function GET() {
       provider: runtime.provider,
       model: runtime.model,
       models,
+      providers: [
+        { provider: runtime.provider, model: runtime.model },
+        ...(bindings.VLLM_MODEL && bindings.VLLM_BASE_URL
+          ? [{ provider: "vllm", model: bindings.VLLM_MODEL, baseURL: bindings.VLLM_BASE_URL }]
+          : []),
+      ],
     });
   } catch (error) {
     if (error instanceof AgentProviderConfigurationError) {

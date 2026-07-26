@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import "./portal.css";
 
 type ChatMessage = { id: number; role: "user" | "assistant"; text: string; meta?: string };
@@ -19,6 +19,24 @@ export default function PortalPage() {
   const [composerMode, setComposerMode] = useState("playground");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [modelOptions, setModelOptions] = useState<string[]>(["gpt-5.1-codex-mini"]);
+  const [selectedModel, setSelectedModel] = useState("gpt-5.1-codex-mini");
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/models", { cache: "no-store" })
+      .then((response) => response.json() as Promise<{ models?: string[]; model?: string }>)
+      .then((data) => {
+        if (!active) return;
+        const options = Array.from(new Set([data.model, ...(data.models ?? [])].filter((value): value is string => Boolean(value))));
+        if (options.length) {
+          setModelOptions(options);
+          setSelectedModel((current) => options.includes(current) ? current : options[0]);
+        }
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -38,6 +56,7 @@ export default function PortalPage() {
           workspaceId: "workspace_local",
           idempotencyKey: `portal-${Date.now()}`,
           workspace: { repository: "Local workspace" },
+          model: selectedModel,
         }),
       });
       const data = await response.json() as { output?: { summary?: string }; error?: { message?: string } };
@@ -112,7 +131,10 @@ export default function PortalPage() {
                     <button type="button" className={composerMode === "playground" ? "selected" : ""} onClick={() => setComposerMode("playground")}>›_ playground</button>
                     <button type="button" className={composerMode === "preview" ? "selected" : ""} onClick={() => setComposerMode("preview")}>↗ preview</button>
                     <button type="button" className={composerMode === "files" ? "selected" : ""} onClick={() => setComposerMode("files")}>▱ files</button>
-                    <span className="composer-spacer" /><span className="portal-model">gpt-5.4-mini</span>
+                    <span className="composer-spacer" />
+                    <select className="portal-model-picker" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model">
+                      {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
                     <button className="send-message" type="submit" aria-label="Send message" disabled={!prompt.trim() || busy}>↑</button>
                   </div>
                 </form>
