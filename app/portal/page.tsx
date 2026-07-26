@@ -20,17 +20,19 @@ export default function PortalPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [modelOptions, setModelOptions] = useState<string[]>(["gpt-5.1-codex-mini"]);
+  const [modelStatus, setModelStatus] = useState<Record<string, "ready" | "configured" | "unavailable">>({});
   const [selectedModel, setSelectedModel] = useState("gpt-5.1-codex-mini");
 
   useEffect(() => {
     let active = true;
     void fetch("/api/models", { cache: "no-store" })
-      .then((response) => response.json() as Promise<{ models?: string[]; model?: string }>)
+      .then((response) => response.json() as Promise<{ models?: string[]; model?: string; modelStatus?: Record<string, "ready" | "configured" | "unavailable"> }>)
       .then((data) => {
         if (!active) return;
         const options = Array.from(new Set([data.model, ...(data.models ?? [])].filter((value): value is string => Boolean(value))));
         if (options.length) {
           setModelOptions(options);
+          setModelStatus(data.modelStatus ?? {});
           setSelectedModel((current) => options.includes(current) ? current : options[0]);
         }
       })
@@ -133,7 +135,10 @@ export default function PortalPage() {
                     <button type="button" className={composerMode === "files" ? "selected" : ""} onClick={() => setComposerMode("files")}>▱ files</button>
                     <span className="composer-spacer" />
                     <select className="portal-model-picker" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model">
-                      {modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+                      {modelOptions.map((model) => {
+                        const status = modelStatus[model] ?? "configured";
+                        return <option key={model} value={model} disabled={status !== "ready"}>{model} · {status}</option>;
+                      })}
                     </select>
                     <button className="send-message" type="submit" aria-label="Send message" disabled={!prompt.trim() || busy}>↑</button>
                   </div>
