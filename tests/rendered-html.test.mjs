@@ -5,8 +5,9 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("builds the Conductor workspace shell", async () => {
-  const [page, layout, workspace, workspaceRoute, agentRoute, provider, environmentStore, builtManifest] = await Promise.all([
+  const [page, portal, layout, workspace, workspaceRoute, agentRoute, provider, environmentStore, builtManifest] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/portal/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/workspace-client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/workspace/route.ts", import.meta.url), "utf8"),
@@ -16,8 +17,10 @@ test("builds the Conductor workspace shell", async () => {
     readFile(new URL("../dist/server/.vite/manifest.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /<WorkspaceClient\s*\/>/);
-  assert.match(layout, /Conductor — AI engineering workspace/);
+  assert.match(page, /<PortalPage\s*\/>/);
+  assert.match(page, /\.\/portal\/page/);
+  assert.match(portal, /Message the DTS assistant/);
+  assert.match(layout, /Conductor/);
   assert.match(workspace, /data-testid="conductor-workspace"/);
   assert.match(workspace, /Context inspector/);
   assert.match(workspace, /Agent mode/);
@@ -62,8 +65,8 @@ test("removes starter artifacts and declares durable state", async () => {
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /WorkspaceClient/);
-  assert.match(layout, /Conductor — AI engineering workspace/);
+  assert.match(page, /PortalPage/);
+  assert.match(layout, /Conductor/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.deepEqual(JSON.parse(hosting).d1, "DB");
 

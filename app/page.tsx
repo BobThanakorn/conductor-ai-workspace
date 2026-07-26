@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import WorkspaceClient from "./workspace-client";
+import PortalPage from "./portal/page";
 
 export const metadata: Metadata = {
-  title: "Conductor — AI engineering workspace",
-  description:
-    "A secure workspace for planning, reviewing, and shipping work with coding agents.",
+  title: "Conductor — AI workspace",
+  description: "Chat-first AI engineering workspace with an integrated repository panel.",
 };
 
 export default function Home() {
-  return <WorkspaceClient />;
+  return <PortalPage />;
 }

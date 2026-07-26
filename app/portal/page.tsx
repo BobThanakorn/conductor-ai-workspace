@@ -157,7 +157,7 @@ export default function PortalPage() {
             <div className="workspace-divider" />
             <div className="workspace-section-label">AGENT RUN</div>
             <div className="run-card"><span className="run-dot" /><div><strong>Ready for review</strong><small>Approval-gated · local</small></div></div>
-            <button className="open-old-workspace" type="button" onClick={() => window.location.assign("/")}>Open Code Workspace →</button>
+            <button className="open-old-workspace" type="button" onClick={() => window.location.assign("/code")}>Open Code Workspace →</button>
           </aside>}
           {!workspaceOpen && <button className="workspace-reopen" type="button" onClick={() => setWorkspaceOpen(true)}>▱ Workspace</button>}
         </div>
