@@ -251,14 +251,6 @@ async function initialize(database: D1Database): Promise<void> {
   );
 
   await database.batch([
-    database.prepare("DROP TRIGGER IF EXISTS task_events_no_update"),
-    database.prepare("DROP TRIGGER IF EXISTS task_events_no_delete"),
-    database.prepare("DELETE FROM agent_runs WHERE workspace_id = ?").bind("workspace_atlas"),
-    database.prepare("DELETE FROM approvals WHERE workspace_id = ?").bind("workspace_atlas"),
-    database.prepare("DELETE FROM task_events WHERE workspace_id = ?").bind("workspace_atlas"),
-    database.prepare("DELETE FROM tasks WHERE workspace_id = ?").bind("workspace_atlas"),
-    database.prepare("DELETE FROM workspaces WHERE id = ?").bind("workspace_atlas"),
-    database.prepare("DELETE FROM idempotency_keys WHERE scope LIKE ?").bind("%workspace_atlas%"),
     database
       .prepare(
         `INSERT OR IGNORE INTO workspaces
@@ -1013,7 +1005,19 @@ export async function persistAgentRun(
     createdAt,
   };
 
-  const results = await database.batch([
+  const needsApproval = options.output.needsApproval === true && Boolean(options.taskId);
+  const approvalId = needsApproval ? `approval_${suffix}` : undefined;
+  const approvalDigest = needsApproval
+    ? await digest(canonicalRequest({
+        action: options.output.proposedAction ?? "agent.apply",
+        taskId: options.taskId,
+        artifacts: options.output.artifacts ?? [],
+        execution: options.output.execution ?? null,
+      }))
+    : undefined;
+  const approvalExpiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  const approvalEventId = needsApproval ? `evt_approval_requested_${suffix}` : undefined;
+  const statements = [
     database
       .prepare(
         `INSERT OR IGNORE INTO agent_runs
@@ -1051,17 +1055,76 @@ export async function persistAgentRun(
         }),
         createdAt,
       ),
+  ];
+
+  if (needsApproval && approvalId && approvalDigest && approvalEventId) {
+    statements.push(
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO approvals
+            (id, workspace_id, task_id, action, summary, risk_level, status, details_json,
+             action_digest, requested_by, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'Coding Agent', ?)`,
+        )
+        .bind(
+          approvalId,
+          options.workspaceId,
+          options.taskId,
+          typeof options.output.proposedAction === "string" ? options.output.proposedAction : "agent.apply",
+          summary,
+          typeof options.output.riskLevel === "string" ? options.output.riskLevel : "R1",
+          JSON.stringify({
+            runId,
+            artifacts: options.output.artifacts ?? [],
+            execution: options.output.execution ?? null,
+            proposal: options.output,
+          }),
+          approvalDigest,
+          approvalExpiresAt,
+        ),
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO task_events
+            (event_id, workspace_id, task_id, type, actor, summary, payload_json, created_at)
+           VALUES (?, ?, ?, 'approval.requested', 'Coding Agent', ?, ?, ?)`,
+        )
+        .bind(
+          approvalEventId,
+          options.workspaceId,
+          options.taskId,
+          `Approval required: ${summary}`,
+          JSON.stringify({ approvalId, actionDigest: approvalDigest, expiresAt: approvalExpiresAt }),
+          createdAt,
+        ),
+      database
+        .prepare(
+          `UPDATE tasks SET status = 'waiting_for_approval', progress = MAX(progress, 60), updated_at = ?
+           WHERE id = ? AND workspace_id = ? AND status NOT IN ('completed', 'cancelled')`,
+        )
+        .bind(createdAt, options.taskId, options.workspaceId),
+    );
+  }
+
+  statements.push(
     completedIdempotencyStatement(
       database,
       options.scope,
       options.key,
       options.ownerToken,
       200,
-      body,
+      {
+        ...body,
+        ...(approvalId ? { approvalId, approvalExpiresAt } : {}),
+      },
     ),
-  ]);
+  );
+
+  const results = await database.batch(statements);
   if (changed(results[0]) !== 1) {
     throw new ApiError(409, "agent_run_conflict", "The agent run already exists.");
   }
-  return body;
+  return {
+    ...body,
+    ...(approvalId ? { approvalId, approvalExpiresAt } : {}),
+  };
 }

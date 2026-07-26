@@ -92,7 +92,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
         root: top.stdout.trim(),
         branch: branch.stdout.trim(),
         executionMode: process.env.CONDUCTOR_EXECUTION_MODE ?? "host-readonly",
-        capabilities: ["filesystem", "terminal", "git-local", "git-remote", "github-pr"],
+        capabilities: ["filesystem", "terminal", "git-local", "git-remote", "github-repository", "github-pr"],
       });
     }
 
@@ -182,6 +182,22 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       const result = await githubResponse.json() as Record<string, unknown>;
       if (!githubResponse.ok) throw new Error(typeof result.message === "string" ? result.message : "GitHub pull request creation failed.");
       return send(response, 200, { ok: true, number: result.number, url: result.html_url });
+    }
+    if (request.method === "POST" && url.pathname === "/provider/github/repository") {
+      const body = await approvedBody(request, "github.create-repository");
+      const token = process.env.GITHUB_TOKEN?.trim();
+      if (!token) throw new Error("GITHUB_TOKEN is not configured in the companion environment.");
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const description = typeof body.description === "string" ? body.description.trim().slice(0, 1_000) : "";
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(name)) throw new Error("name must be a valid GitHub repository name.");
+      const githubResponse = await fetch("https://api.github.com/user/repos", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "Conductor-Companion", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, private: body.private !== false, auto_init: body.autoInit === true }),
+      });
+      const result = await githubResponse.json() as Record<string, unknown>;
+      if (!githubResponse.ok) throw new Error(typeof result.message === "string" ? result.message : "GitHub repository creation failed.");
+      return send(response, 200, { ok: true, repository: result.full_name, url: result.html_url, cloneUrl: result.clone_url, defaultBranch: result.default_branch ?? "main" });
     }
 
     return send(response, 404, { ok: false, error: "Not found." });
