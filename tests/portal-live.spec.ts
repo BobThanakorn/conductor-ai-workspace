@@ -24,3 +24,25 @@ test("chat-first portal is wired to the live local runtime", async ({ page }) =>
   await expect(page.locator(".portal-message.assistant").last()).toBeVisible({ timeout: 90_000 });
   await expect(page.locator(".portal-error")).toHaveCount(0);
 });
+
+test("Agent mode renders an approval card for a bounded command batch", async ({ page }) => {
+  await page.goto("http://127.0.0.1:3000/");
+  await expect(page.getByText("Execution companion connected")).toBeVisible();
+
+  const composer = page.getByLabel("Message the Conductor Agent");
+  await composer.fill([
+    "Create an execution proposal only. Do not create or modify files.",
+    "Run this sequential batch using executions: python3 calculator-cli/cli.py add 10 5; python3 calculator-cli/cli.py subtract 10 5; python3 calculator-cli/cli.py multiply 10 5; python3 calculator-cli/cli.py divide 10 2; python3 calculator-cli/cli.py divide 10 0.",
+    "Require approval and return execution null.",
+  ].join(" "));
+
+  const agentButton = page.getByRole("button", { name: "Agent", exact: true });
+  await expect(agentButton).toHaveCount(1);
+  await agentButton.click();
+  const sendButton = page.getByRole("button", { name: "↑", exact: true });
+  await expect(sendButton).toHaveCount(1);
+  await sendButton.click();
+
+  await expect(page.getByText("Review proposed command batch")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("button", { name: "Approve, apply & run", exact: true })).toBeVisible();
+});
