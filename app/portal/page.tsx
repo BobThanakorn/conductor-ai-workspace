@@ -135,6 +135,7 @@ export default function PortalPage() {
   const [selectedFile, setSelectedFile] = useState("");
   const [fileContent, setFileContent] = useState("");
   const [contextFiles, setContextFiles] = useState<Array<{ path: string; content: string }>>([]);
+  const [fileFilter, setFileFilter] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
   const [models, setModels] = useState<string[]>([]);
   const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>({});
@@ -148,6 +149,10 @@ export default function PortalPage() {
   const activeTask = workspace.activeTask ?? workspace.tasks?.[0] ?? null;
   const companionReady = health?.ok === true;
   const allFiles = useMemo(() => flattenFiles(files), [files]);
+  const visibleFiles = useMemo(() => {
+    const query = fileFilter.trim().toLowerCase();
+    return query ? allFiles.filter((file) => file.path.toLowerCase().includes(query)) : allFiles;
+  }, [allFiles, fileFilter]);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -658,13 +663,20 @@ export default function PortalPage() {
                 </div>
               </div>
               <div className="workspace-section-label">FILES <span>{allFiles.length}</span></div>
+              <input
+                className="workspace-file-filter"
+                value={fileFilter}
+                onChange={(event) => setFileFilter(event.target.value)}
+                placeholder="Search files…"
+                aria-label="Search repository files"
+              />
               <div className="workspace-file-list">
-                {allFiles.map((file) => (
+                {visibleFiles.map((file) => (
                   <button className={`workspace-file ${selectedFile === file.path ? "active" : ""}`} type="button" key={file.path} onClick={() => void openFile(file.path)}>
                     <span>◫</span><strong>{file.path}</strong>
                   </button>
                 ))}
-                {!allFiles.length && <p className="empty-copy">No files available from the companion.</p>}
+                {!visibleFiles.length && <p className="empty-copy">No matching files.</p>}
               </div>
               {selectedFile && (
                 <>
