@@ -19,7 +19,15 @@ test("builds the Conductor workspace shell", async () => {
 
   assert.match(page, /<PortalPage\s*\/>/);
   assert.match(page, /\.\/portal\/page/);
-  assert.match(portal, /Message the DTS assistant/);
+  assert.match(portal, /Message the Conductor Agent/);
+  assert.match(portal, /approvedCompanionAction/);
+  assert.match(portal, /\/fs\/tree/);
+  assert.match(portal, /\/fs\/read/);
+  assert.match(portal, /\/fs\/write/);
+  assert.match(portal, /\/terminal\/execute/);
+  assert.match(portal, /\/git\/commit/);
+  assert.match(portal, /\/provider\/github\/repository/);
+  assert.doesNotMatch(portal, /DTS Assistant|6 active|hello\.txt|next integration phase|พร้อมต่อยอด/);
   assert.match(layout, /Conductor/);
   assert.match(workspace, /data-testid="conductor-workspace"/);
   assert.match(workspace, /Context inspector/);

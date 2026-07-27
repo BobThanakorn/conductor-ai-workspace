@@ -10,6 +10,21 @@ const execFileAsync = promisify(execFile);
 export const MAX_OUTPUT_BYTES = 512_000;
 export const MAX_FILE_BYTES = 1_000_000;
 
+function isSensitiveWorkspacePath(relativePath: string) {
+  return relativePath.split("/").some((segment) =>
+    segment === ".env" ||
+    (segment.startsWith(".env.") && segment !== ".env.example") ||
+    segment.startsWith("secret.") ||
+    segment === ".git",
+  );
+}
+
+function requireNonSensitiveWorkspacePath(relativePath: string) {
+  if (isSensitiveWorkspacePath(relativePath)) {
+    throw new Error("Sensitive environment, secret, and Git-internal paths are not exposed through the companion.");
+  }
+}
+
 export type ProcessResult = {
   stdout: string;
   stderr: string;
@@ -29,12 +44,18 @@ export function resolveWorkspacePath(root: string, requested: string) {
 export async function listWorkspace(root: string, requested = ".", depth = 4) {
   const base = requested === "." ? path.resolve(root) : resolveWorkspacePath(root, requested).resolved;
   const ignored = new Set([".git", "node_modules", "dist", ".next", ".vinext", ".wrangler"]);
+  const isSensitiveOrGenerated = (name: string) =>
+    name === ".env" ||
+    (name.startsWith(".env.") && name !== ".env.example") ||
+    name.startsWith("secret.") ||
+    name.endsWith(".tar.gz") ||
+    name === "tsconfig.tsbuildinfo";
   async function walk(directory: string, level: number): Promise<unknown[]> {
     if (level > Math.min(Math.max(depth, 1), 8)) return [];
     const entries = await readdir(directory, { withFileTypes: true });
     const result: unknown[] = [];
     for (const entry of entries.slice(0, 500)) {
-      if (ignored.has(entry.name)) continue;
+      if (ignored.has(entry.name) || isSensitiveOrGenerated(entry.name)) continue;
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(root, absolute).split(path.sep).join("/");
       if (entry.isSymbolicLink()) continue;
@@ -52,6 +73,7 @@ export async function listWorkspace(root: string, requested = ".", depth = 4) {
 
 export async function readWorkspaceFile(root: string, requested: string) {
   const target = resolveWorkspacePath(root, requested);
+  requireNonSensitiveWorkspacePath(target.relative);
   const metadata = await stat(target.resolved);
   if (!metadata.isFile()) throw new Error("Requested path is not a file.");
   if (metadata.size > MAX_FILE_BYTES) throw new Error("File exceeds the 1 MB read limit.");
@@ -74,6 +96,7 @@ export async function writeWorkspaceFiles(root: string, files: unknown) {
     totalBytes += bytes;
     if (bytes > MAX_FILE_BYTES || totalBytes > 4_000_000) throw new Error("File write limit exceeded.");
     const target = resolveWorkspacePath(root, value.path);
+    requireNonSensitiveWorkspacePath(target.relative);
     await mkdir(path.dirname(target.resolved), { recursive: true });
     await writeFile(target.resolved, value.content, "utf8");
     written.push(target.relative);
@@ -89,6 +112,7 @@ export async function deleteWorkspacePaths(root: string, paths: unknown) {
   for (const item of paths) {
     if (typeof item !== "string") throw new Error("paths must contain strings.");
     const target = resolveWorkspacePath(root, item);
+    requireNonSensitiveWorkspacePath(target.relative);
     await rm(target.resolved, { recursive: true, force: false });
     deleted.push(target.relative);
   }

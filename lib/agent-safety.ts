@@ -130,7 +130,10 @@ export const pythonExecutionSchema = z
 export const agentProposalSchema = z
   .object({
     summary: z.string().min(1).max(1_200),
-    plan: z.array(z.string().min(1).max(320)).min(1).max(12),
+    // Analysis-only answers may be complete without a multi-step plan. Keeping
+    // this field as an array preserves a stable response contract while
+    // avoiding provider failures caused by an otherwise valid empty plan.
+    plan: z.array(z.string().min(1).max(320)).max(12),
     proposedAction: z.string().min(1).max(240),
     riskLevel: z.enum(["R0", "R1", "R2", "R3"]),
     needsApproval: z.boolean(),

@@ -54,7 +54,7 @@ services:
       CONDUCTOR_COMPANION_PORT: 8765
       CONDUCTOR_WORKSPACE_ROOT: /workspace
       CONDUCTOR_EXECUTION_MODE: container
-      CONDUCTOR_ALLOWED_ORIGINS: ${CONDUCTOR_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      CONDUCTOR_ALLOWED_ORIGINS: ${CONDUCTOR_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,https://conductor-workspace-20260715.galilrevanov.chatgpt.site}
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /workspace

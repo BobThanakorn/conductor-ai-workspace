@@ -87,12 +87,20 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
 
     if (request.method === "GET" && url.pathname === "/health") {
       const [top, branch] = await Promise.all([runGit(ROOT, ["rev-parse", "--show-toplevel"]), runGit(ROOT, ["branch", "--show-current"])]);
+      const githubConfigured = Boolean(process.env.GITHUB_TOKEN?.trim());
       return send(response, 200, {
         ok: true,
         root: top.stdout.trim(),
         branch: branch.stdout.trim(),
         executionMode: process.env.CONDUCTOR_EXECUTION_MODE ?? "host-readonly",
-        capabilities: ["filesystem", "terminal", "git-local", "git-remote", "github-repository", "github-pr"],
+        capabilities: [
+          "filesystem",
+          "terminal",
+          "git-local",
+          "git-remote",
+          ...(githubConfigured ? ["github-repository", "github-pr"] : []),
+        ],
+        integrations: { github: githubConfigured },
       });
     }
 

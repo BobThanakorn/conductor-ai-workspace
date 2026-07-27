@@ -27,7 +27,10 @@ export async function GET() {
             .map((entry) => typeof entry.id === "string" ? entry.id.trim() : "")
             .filter(Boolean)
             .slice(0, 32);
-          for (const model of remoteModels) modelStatus[model] = "ready";
+          // Provider discovery proves that a model identifier is listed, not
+          // that this resource can successfully invoke it. Only the configured
+          // default is marked ready until an actual inference succeeds.
+          for (const model of remoteModels) modelStatus[model] ??= "configured";
           models = [...new Set([runtime.model, ...remoteModels, ...models])].slice(0, 32);
         }
       } catch {
