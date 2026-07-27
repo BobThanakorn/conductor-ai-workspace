@@ -307,7 +307,19 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 
 @media (max-width: 760px) {
   .portal-sidebar { display: none; }
-  .portal-workspace { display: none; }
+  /* Keep repository files discoverable on narrow screens. The file panel is
+     intentionally overlaid instead of disappearing behind a responsive rule. */
+  .portal-workspace {
+    display: block;
+    position: fixed;
+    z-index: 20;
+    top: 58px;
+    right: 0;
+    bottom: 0;
+    width: min(285px, 82vw);
+    flex: none;
+    box-shadow: -8px 0 24px #34432e20;
+  }
   .portal-header { min-height: 58px; padding: 0 10px; }
   .portal-tabs button { padding: 8px 11px; }
   .header-status { display: none; }
