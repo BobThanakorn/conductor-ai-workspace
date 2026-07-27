@@ -44,5 +44,51 @@ test("Agent mode renders an approval card for a bounded command batch", async ({
   await sendButton.click();
 
   await expect(page.getByText("Review proposed command batch")).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByRole("button", { name: "Approve, apply & run", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve & run", exact: true })).toBeVisible();
+});
+
+test("prose-only Agent output is recovered and executes the exact reviewed commands", async ({ page }) => {
+  await page.route("**/api/agent", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        output: {
+          summary: "Plan to run the requested calculator commands after approval.",
+          plan: ["Run all five explicit commands and report every exit code."],
+          proposedAction: "Run calculator checks.",
+          riskLevel: "R1",
+          needsApproval: true,
+          evidence: [],
+          artifacts: [],
+          execution: null,
+        },
+      }),
+    });
+  });
+  await page.goto("http://127.0.0.1:3000/");
+
+  const composer = page.getByLabel("Message the Conductor Agent");
+  await composer.fill([
+    "Run these commands as an approved batch:",
+    "python3 calculator-cli/cli.py add 10 5",
+    "python3 calculator-cli/cli.py subtract 10 5",
+    "python3 calculator-cli/cli.py multiply 10 5",
+    "python3 calculator-cli/cli.py divide 10 2",
+    "python3 calculator-cli/cli.py divide 10 0",
+  ].join("\n"));
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await page.getByRole("button", { name: "↑", exact: true }).click();
+
+  await expect(page.getByText("Review proposed command batch")).toBeVisible();
+  const approve = page.getByRole("button", { name: "Approve & run", exact: true });
+  await expect(approve).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await approve.click();
+
+  const terminal = page.locator(".terminal-output");
+  await expect(terminal).toContainText("15.0", { timeout: 30_000 });
+  await expect(terminal).toContainText("Error: Cannot divide by zero");
+  await expect(terminal).toContainText("exit 1");
 });

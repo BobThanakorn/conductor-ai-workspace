@@ -607,7 +607,9 @@ export default function PortalPage() {
                     ))}
                     <div className="proposal-actions">
                       <button type="button" onClick={() => setProposal(null)} disabled={busy}>Reject</button>
-                      <button type="button" onClick={() => void applyProposal()} disabled={busy || !companionReady}>Approve, apply & run</button>
+                      <button type="button" onClick={() => void applyProposal()} disabled={busy || !companionReady}>
+                        {proposal.artifacts?.length ? "Approve, apply & run" : "Approve & run"}
+                      </button>
                     </div>
                   </section>
                 )}
