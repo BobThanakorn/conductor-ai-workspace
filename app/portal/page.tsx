@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import "./portal.css";
 
 const COMPANION_URL = "http://127.0.0.1:8765";
-const WORKSPACE_ID = "workspace_local";
+const DEFAULT_WORKSPACE_ID = "workspace_local";
 
 type ModelStatus = "ready" | "configured" | "unavailable";
 type ChatMessage = {
@@ -61,6 +61,17 @@ type CompanionHealth = {
   error?: string;
 };
 type WorkspaceState = {
+  workspace?: {
+    id?: string;
+    name?: string;
+    status?: string;
+    repository?: {
+      name?: string;
+      path?: string;
+      provider?: string;
+      activeBranch?: string;
+    };
+  };
   activeTask?: Task | null;
   tasks?: Task[];
   recentAgentRuns?: Array<{
@@ -70,6 +81,24 @@ type WorkspaceState = {
     plan?: string[];
     createdAt?: string;
   }>;
+};
+type RepositorySummary = {
+  id: string;
+  name: string;
+  repositoryName: string;
+  path: string;
+  provider: string;
+  defaultBranch: string;
+  activeBranch: string;
+  headSha: string;
+  status: string;
+  taskCount: number;
+  recentTask?: {
+    title?: string;
+    status?: string;
+    updatedAt?: string;
+  } | null;
+  updatedAt: string;
 };
 
 function uniqueKey(prefix: string) {
@@ -176,25 +205,44 @@ export default function PortalPage() {
   const [commitMessage, setCommitMessage] = useState("");
   const [repositoryName, setRepositoryName] = useState("");
   const [repositoryPrivate, setRepositoryPrivate] = useState(true);
+  const [repositories, setRepositories] = useState<RepositorySummary[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(DEFAULT_WORKSPACE_ID);
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [repositoryFilter, setRepositoryFilter] = useState("");
 
   const activeTask = workspace.activeTask ?? workspace.tasks?.[0] ?? null;
   const companionReady = health?.ok === true;
+  const selectedRepository = repositories.find((repository) => repository.id === selectedWorkspaceId);
+  const workspaceRuntimeReady = companionReady &&
+    (!selectedRepository || selectedRepository.path === health?.root);
   const allFiles = useMemo(() => flattenFiles(files), [files]);
   const visibleFiles = useMemo(() => {
     const query = fileFilter.trim().toLowerCase();
     return query ? allFiles.filter((file) => file.path.toLowerCase().includes(query)) : allFiles;
   }, [allFiles, fileFilter]);
+  const visibleRepositories = useMemo(() => {
+    const query = repositoryFilter.trim().toLowerCase();
+    return query
+      ? repositories.filter((repository) =>
+          `${repository.name} ${repository.repositoryName}`.toLowerCase().includes(query),
+        )
+      : repositories;
+  }, [repositories, repositoryFilter]);
 
   const refresh = useCallback(async () => {
     setError("");
+    const workspaceQuery = new URLSearchParams({ workspaceId: selectedWorkspaceId });
+    if (selectedTaskId) workspaceQuery.set("taskId", selectedTaskId);
     const results = await Promise.allSettled([
       fetch(`${COMPANION_URL}/health`, { cache: "no-store" }).then(readJson<CompanionHealth>),
       fetch(`${COMPANION_URL}/fs/tree?path=.&depth=6`, { cache: "no-store" })
         .then(readJson<{ entries: FileEntry[] }>),
       fetch(`${COMPANION_URL}/git/status`, { cache: "no-store" })
         .then(readJson<{ files?: GitFile[]; head?: string }>),
-      fetch(`/api/workspace?workspaceId=${WORKSPACE_ID}`, { cache: "no-store" })
+      fetch(`/api/workspace?${workspaceQuery}`, { cache: "no-store" })
         .then(readJson<WorkspaceState>),
+      fetch("/api/repositories", { cache: "no-store" })
+        .then(readJson<{ repositories?: RepositorySummary[] }>),
       fetch("/api/models", { cache: "no-store" })
         .then(readJson<{
           models?: string[];
@@ -203,12 +251,23 @@ export default function PortalPage() {
         }>),
     ]);
 
-    const [healthResult, treeResult, gitResult, workspaceResult, modelResult] = results;
-    if (healthResult.status === "fulfilled") setHealth(healthResult.value);
-    else setHealth({ ok: false, error: "Local execution companion is not reachable." });
-    if (treeResult.status === "fulfilled") setFiles(treeResult.value.entries);
+    const [healthResult, treeResult, gitResult, workspaceResult, repositoriesResult, modelResult] = results;
+    const nextHealth = healthResult.status === "fulfilled"
+      ? healthResult.value
+      : { ok: false, error: "Local execution companion is not reachable." };
+    const nextRepositories = repositoriesResult.status === "fulfilled"
+      ? repositoriesResult.value.repositories ?? []
+      : [];
+    const nextSelectedRepository = nextRepositories.find((repository) =>
+      repository.id === selectedWorkspaceId
+    );
+    const runtimeMatchesSelection = nextHealth.ok === true &&
+      (!nextSelectedRepository || nextSelectedRepository.path === nextHealth.root);
+
+    setHealth(nextHealth);
+    if (runtimeMatchesSelection && treeResult.status === "fulfilled") setFiles(treeResult.value.entries);
     else setFiles([]);
-    if (gitResult.status === "fulfilled") {
+    if (runtimeMatchesSelection && gitResult.status === "fulfilled") {
       setGitFiles(gitResult.value.files ?? []);
       setGitHead(gitResult.value.head ?? "");
     } else {
@@ -226,6 +285,9 @@ export default function PortalPage() {
         })));
       }
     }
+    if (repositoriesResult.status === "fulfilled") {
+      setRepositories(nextRepositories);
+    }
     if (modelResult.status === "fulfilled") {
       const options = Array.from(new Set([
         modelResult.value.model,
@@ -240,7 +302,7 @@ export default function PortalPage() {
         current && options.includes(current) ? current : firstReady,
       );
     }
-  }, [messages.length]);
+  }, [messages.length, selectedTaskId, selectedWorkspaceId]);
 
   useEffect(() => {
     const pending = window.setTimeout(() => void refresh(), 0);
@@ -265,7 +327,7 @@ export default function PortalPage() {
           },
           body: JSON.stringify({
             action: "create_task",
-            workspaceId: WORKSPACE_ID,
+            workspaceId: selectedWorkspaceId,
             idempotencyKey: key,
             title: title.trim(),
             goal: goal.trim(),
@@ -281,6 +343,61 @@ export default function PortalPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function connectCurrentRepository() {
+    if (!health?.ok || !health.root) {
+      setError("Connect the local execution companion before adding a repository.");
+      return;
+    }
+    const name = health.root.split(/[\\/]/).filter(Boolean).at(-1) || "workspace";
+    setBusy(true);
+    setError("");
+    try {
+      const result = await readJson<{ repository: { id: string } }>(
+        await fetch("/api/repositories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            path: health.root,
+            provider: "local",
+            defaultBranch: health.branch || "main",
+            activeBranch: health.branch || "main",
+            baseSha: gitHead,
+            headSha: gitHead,
+          }),
+        }),
+      );
+      setSelectedWorkspaceId(result.repository.id);
+      setSelectedTaskId("");
+      setMessages([]);
+      setProposal(null);
+      setExecutionResults([]);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Repository connection failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function selectRepository(repositoryId: string) {
+    if (repositoryId === selectedWorkspaceId) return;
+    setSelectedWorkspaceId(repositoryId);
+    setSelectedTaskId("");
+    setWorkspace({});
+    setMessages([]);
+    setProposal(null);
+    setExecutionResults([]);
+    setContextFiles([]);
+  }
+
+  function selectTask(taskId: string) {
+    if (taskId === selectedTaskId) return;
+    setSelectedTaskId(taskId);
+    setMessages([]);
+    setProposal(null);
+    setExecutionResults([]);
   }
 
   async function openFile(path: string, addToContext = false) {
@@ -343,7 +460,7 @@ export default function PortalPage() {
             mode: agentMode,
             model: selectedModel,
             taskId: activeTask?.id,
-            workspaceId: WORKSPACE_ID,
+            workspaceId: selectedWorkspaceId,
             idempotencyKey: key,
             workspaceFiles: contextFiles,
             workspace: {
@@ -513,13 +630,41 @@ export default function PortalPage() {
   return (
     <main className="portal-shell">
       <aside className="portal-sidebar" aria-label="Workspace navigation">
-        <div className="portal-label">WORKSPACE</div>
-        <div className="project-card">
-          <span className="project-avatar">{companionReady ? "✓" : "!"}</span>
-          <span>
-            <strong>{health?.root?.split(/[\\/]/).pop() || "Not connected"}</strong>
-            <small>{health?.branch || health?.error || "Start the companion"}</small>
-          </span>
+        <div className="repository-sidebar-heading">
+          <div className="portal-label">REPOSITORIES</div>
+          <button type="button" onClick={() => void connectCurrentRepository()} disabled={busy || !companionReady} aria-label="Connect current repository">＋</button>
+        </div>
+        <input
+          className="repository-filter"
+          value={repositoryFilter}
+          onChange={(event) => setRepositoryFilter(event.target.value)}
+          placeholder="Search repositories…"
+          aria-label="Search repositories"
+        />
+        <div className="repository-list">
+          {visibleRepositories.map((repository) => (
+            <button
+              className={`repository-item ${repository.id === selectedWorkspaceId ? "selected" : ""}`}
+              type="button"
+              key={repository.id}
+              onClick={() => selectRepository(repository.id)}
+            >
+              <span className="repository-folder">▱</span>
+              <span>
+                <strong>{repository.repositoryName || repository.name}</strong>
+                <small>{repository.activeBranch || repository.status}</small>
+                {repository.recentTask?.title && (
+                  <em>
+                    <span>{repository.recentTask.title}</span>
+                    <time>{repository.recentTask.status}</time>
+                  </em>
+                )}
+              </span>
+            </button>
+          ))}
+          {!visibleRepositories.length && (
+            <p className="empty-copy">No connected repositories.</p>
+          )}
         </div>
         <button className="new-chat" type="button" onClick={() => void createTask()} disabled={busy}>
           <span>＋</span> New Agent task
@@ -527,20 +672,25 @@ export default function PortalPage() {
         <div className="portal-label manage-label">TASKS</div>
         <div className="task-list">
           {(workspace.tasks ?? []).map((task) => (
-            <div className={`recent-chat ${task.id === activeTask?.id ? "selected" : ""}`} key={task.id}>
+            <button
+              className={`recent-chat ${task.id === activeTask?.id ? "selected" : ""}`}
+              type="button"
+              key={task.id}
+              onClick={() => task.id && selectTask(task.id)}
+            >
               <i />
               <span>
                 <strong>{task.title || task.id}</strong>
-                <small>{task.status || "unknown"} · {task.progress ?? 0}%</small>
+                <small>{task.status || "unknown"}</small>
               </span>
-            </div>
+            </button>
           ))}
           {!workspace.tasks?.length && <p className="empty-copy">No durable task yet.</p>}
         </div>
         <div className="sidebar-spacer" />
-        <div className={`connection-card ${companionReady ? "ready" : "offline"}`}>
-          <strong>{companionReady ? "Execution companion connected" : "Execution companion offline"}</strong>
-          <small>{health?.executionMode || "Run npm run companion:git or Docker Compose."}</small>
+        <div className={`connection-card ${workspaceRuntimeReady ? "ready" : "offline"}`}>
+          <strong>{workspaceRuntimeReady ? "Repository runtime connected" : "Repository runtime unavailable"}</strong>
+          <small>{workspaceRuntimeReady ? health?.executionMode : "Select or connect the repository mounted by the companion."}</small>
         </div>
       </aside>
 
@@ -552,8 +702,8 @@ export default function PortalPage() {
             <button type="button" className={activeTab === "project" ? "active" : ""} onClick={() => setActiveTab("project")}>▣ Project</button>
           </div>
           <div className="header-status">
-            <span className={companionReady ? "status-ready" : "status-offline"} />
-            {companionReady ? `${health?.branch || "detached"} · ${gitHead || "no HEAD"}` : "Companion offline"}
+            <span className={workspaceRuntimeReady ? "status-ready" : "status-offline"} />
+            {workspaceRuntimeReady ? `${health?.branch || "detached"} · ${gitHead || "no HEAD"}` : "Repository runtime unavailable"}
             <button type="button" className="refresh-button" onClick={() => void refresh()} disabled={busy}>↻</button>
           </div>
         </header>
@@ -643,7 +793,7 @@ export default function PortalPage() {
                     ))}
                     <div className="proposal-actions">
                       <button type="button" onClick={() => setProposal(null)} disabled={busy}>Reject</button>
-                      <button type="button" onClick={() => void applyProposal()} disabled={busy || !companionReady}>
+                      <button type="button" onClick={() => void applyProposal()} disabled={busy || !workspaceRuntimeReady}>
                         {proposal.artifacts?.length ? "Approve, apply & run" : "Approve & run"}
                       </button>
                     </div>
@@ -666,7 +816,7 @@ export default function PortalPage() {
                     }}
                   />
                   <div className="composer-toolbar">
-                    <button type="button" onClick={() => void attachFiles()} disabled={!companionReady}>＋ Attach repository file</button>
+                    <button type="button" onClick={() => void attachFiles()} disabled={!workspaceRuntimeReady}>＋ Attach repository file</button>
                     <button type="button" className={agentMode === "ask" ? "selected" : ""} onClick={() => setAgentMode("ask")}>Ask</button>
                     <button type="button" className={agentMode === "agent" ? "selected" : ""} onClick={() => setAgentMode("agent")}>Agent</button>
                     <span className="context-count">{contextFiles.length} context file(s)</span>
@@ -699,7 +849,7 @@ export default function PortalPage() {
                 <div className="git-actions">
                   <input value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder="Commit message" maxLength={200} />
                   <button type="button" onClick={() => void gitCommit()} disabled={busy || !gitFiles.length || !commitMessage.trim()}>Review & commit</button>
-                  <button type="button" onClick={() => void gitPush()} disabled={busy || !companionReady}>Review & push</button>
+                  <button type="button" onClick={() => void gitPush()} disabled={busy || !workspaceRuntimeReady}>Review & push</button>
                 </div>
                 {terminalOutput && <pre className="terminal-output">{terminalOutput}</pre>}
               </section>

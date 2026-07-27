@@ -24,6 +24,16 @@ type WorkspaceRow = {
   updated_at: string;
 };
 
+export type RepositoryRegistration = {
+  name: string;
+  path: string;
+  provider: "local" | "github";
+  defaultBranch: string;
+  activeBranch: string;
+  baseSha: string;
+  headSha: string;
+};
+
 type TaskRow = {
   id: string;
   workspace_id: string;
@@ -306,6 +316,108 @@ function mapTask(row: TaskRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export async function listRepositories(database: D1Database) {
+  const result = await database
+    .prepare(
+      `SELECT w.*,
+         (SELECT COUNT(*) FROM tasks t WHERE t.workspace_id = w.id) AS task_count,
+         (SELECT title FROM tasks t WHERE t.workspace_id = w.id
+          ORDER BY t.updated_at DESC, t.id DESC LIMIT 1) AS recent_task_title,
+         (SELECT status FROM tasks t WHERE t.workspace_id = w.id
+          ORDER BY t.updated_at DESC, t.id DESC LIMIT 1) AS recent_task_status,
+         (SELECT updated_at FROM tasks t WHERE t.workspace_id = w.id
+          ORDER BY t.updated_at DESC, t.id DESC LIMIT 1) AS recent_task_updated_at
+       FROM workspaces w
+       WHERE w.repository_path <> ''
+       ORDER BY w.updated_at DESC, w.name ASC`,
+    )
+    .all<WorkspaceRow & {
+      task_count: number;
+      recent_task_title: string | null;
+      recent_task_status: string | null;
+      recent_task_updated_at: string | null;
+    }>();
+
+  return result.results.map((row) => ({
+    id: row.id,
+    name: row.name,
+    repositoryName: row.repository_name,
+    path: row.repository_path,
+    provider: row.provider,
+    defaultBranch: row.default_branch,
+    activeBranch: row.active_branch,
+    headSha: row.head_sha,
+    status: row.status,
+    taskCount: Number(row.task_count ?? 0),
+    recentTask: row.recent_task_title
+      ? {
+          title: row.recent_task_title,
+          status: row.recent_task_status,
+          updatedAt: row.recent_task_updated_at,
+        }
+      : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function registerRepository(
+  database: D1Database,
+  registration: RepositoryRegistration,
+) {
+  const existing = await database
+    .prepare("SELECT id FROM workspaces WHERE repository_path = ? LIMIT 1")
+    .bind(registration.path)
+    .first<{ id: string }>();
+  const disconnectedDefault = !existing
+    ? await database
+        .prepare(
+          "SELECT id FROM workspaces WHERE id = ? AND status = 'disconnected' LIMIT 1",
+        )
+        .bind(DEFAULT_WORKSPACE_ID)
+        .first<{ id: string }>()
+    : null;
+  const id = existing?.id ??
+    disconnectedDefault?.id ??
+    `repo_${(await digest(registration.path)).slice(0, 16)}`;
+  const now = new Date().toISOString();
+
+  await database
+    .prepare(
+      `INSERT INTO workspaces
+        (id, name, repository_name, repository_path, provider, default_branch,
+         active_branch, base_sha, head_sha, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         repository_name = excluded.repository_name,
+         repository_path = excluded.repository_path,
+         provider = excluded.provider,
+         default_branch = excluded.default_branch,
+         active_branch = excluded.active_branch,
+         base_sha = excluded.base_sha,
+         head_sha = excluded.head_sha,
+         status = 'ready',
+         updated_at = excluded.updated_at`,
+    )
+    .bind(
+      id,
+      registration.name,
+      registration.name,
+      registration.path,
+      registration.provider,
+      registration.defaultBranch,
+      registration.activeBranch,
+      registration.baseSha,
+      registration.headSha,
+      now,
+      now,
+    )
+    .run();
+
+  return { id, ...registration, status: "ready", updatedAt: now };
 }
 
 function mapApproval(row: ApprovalRow) {
@@ -676,7 +788,7 @@ export async function executeWorkspaceAction(
       branch,
       baseSha: workspace.base_sha,
       actor: "Human + Coding Agent",
-      progress: 5,
+      progress: 0,
       model: null,
       cancellationReason: null,
       version: 1,
@@ -697,7 +809,7 @@ export async function executeWorkspaceAction(
           `INSERT OR IGNORE INTO tasks
             (id, workspace_id, title, goal, status, risk_level, branch, base_sha,
              actor, progress, created_by_idempotency_key, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'planning', ?, ?, ?, ?, 5, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, 'planning', ?, ?, ?, ?, 0, ?, ?, ?)`,
         )
         .bind(
           taskId,

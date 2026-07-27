@@ -32,6 +32,70 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 
 .manage-label { margin-top: 25px; }
 
+.repository-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.repository-sidebar-heading .portal-label { margin-bottom: 0; }
+.repository-sidebar-heading button {
+  width: 27px;
+  height: 27px;
+  border: 0;
+  border-radius: 7px;
+  color: #6f766d;
+  background: transparent;
+  cursor: pointer;
+}
+.repository-sidebar-heading button:hover { background: #efeee8; }
+.repository-filter {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  padding: 8px 9px;
+  border: 1px solid #deddd5;
+  border-radius: 8px;
+  color: #444b42;
+  background: #fffefb;
+  outline: none;
+  font-size: 10px;
+}
+.repository-filter:focus { border-color: #9bc9a6; box-shadow: 0 0 0 2px #edf7ee; }
+.repository-list { max-height: 34vh; overflow: auto; }
+.repository-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 9px;
+  color: #555c53;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.repository-item:hover { background: #f1f0ea; }
+.repository-item.selected { color: #2e4e37; background: #eaf3ea; }
+.repository-folder { padding-top: 1px; color: #747b72; }
+.repository-item > span:last-child { min-width: 0; flex: 1; }
+.repository-item strong, .repository-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repository-item strong { font-size: 11px; }
+.repository-item small { margin-top: 3px; color: #979b93; font-size: 9px; }
+.repository-item em {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 7px;
+  color: #6d736b;
+  font-size: 9px;
+  font-style: normal;
+}
+.repository-item em span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repository-item time { flex: 0 0 auto; color: #a1a49d; }
+
 .project-card {
   display: flex;
   align-items: center;
@@ -82,7 +146,12 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   width: 100%;
   box-sizing: border-box;
   padding: 10px 9px;
+  border: 0;
   border-radius: 9px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
 }
 .recent-chat.selected { background: #edf5ed; }
 .recent-chat i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #cca12c; }

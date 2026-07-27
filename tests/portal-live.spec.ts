@@ -5,7 +5,9 @@ test.use({ launchOptions: { channel: "chrome" } });
 test("chat-first portal is wired to the live local runtime", async ({ page }) => {
   await page.goto("http://127.0.0.1:3000/");
 
-  await expect(page.getByText("Execution companion connected")).toBeVisible();
+  await expect(page.getByText("Repository runtime connected")).toBeVisible();
+  await page.getByRole("button", { name: "Connect current repository" }).click();
+  await expect(page.locator(".repository-item").filter({ hasText: "workspace" })).toBeVisible();
   await expect(page.getByLabel("Select model")).toContainText("gpt-5.1-codex-mini · ready");
 
   await page.getByRole("button", { name: "⑂ Git" }).click();
@@ -27,7 +29,7 @@ test("chat-first portal is wired to the live local runtime", async ({ page }) =>
 
 test("Agent mode renders an approval card for a bounded command batch", async ({ page }) => {
   await page.goto("http://127.0.0.1:3000/");
-  await expect(page.getByText("Execution companion connected")).toBeVisible();
+  await expect(page.getByText("Repository runtime connected")).toBeVisible();
 
   const composer = page.getByLabel("Message the Conductor Agent");
   await composer.fill([

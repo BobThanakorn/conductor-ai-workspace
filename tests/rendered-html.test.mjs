@@ -5,12 +5,13 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("builds the Conductor workspace shell", async () => {
-  const [page, portal, layout, workspace, workspaceRoute, agentRoute, provider, environmentStore, builtManifest] = await Promise.all([
+  const [page, portal, layout, workspace, workspaceRoute, repositoriesRoute, agentRoute, provider, environmentStore, builtManifest] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/portal/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/workspace-client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/workspace/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/repositories/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/agent-provider.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/environment-store.ts", import.meta.url), "utf8"),
@@ -27,6 +28,10 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(portal, /\/terminal\/execute/);
   assert.match(portal, /\/git\/commit/);
   assert.match(portal, /\/provider\/github\/repository/);
+  assert.match(portal, /Search repositories/);
+  assert.match(portal, /Connect current repository/);
+  assert.match(repositoriesRoute, /listRepositories/);
+  assert.match(repositoriesRoute, /registerRepository/);
   assert.doesNotMatch(portal, /DTS Assistant|6 active|hello\.txt|next integration phase|พร้อมต่อยอด/);
   assert.match(layout, /Conductor/);
   assert.match(workspace, /data-testid="conductor-workspace"/);
