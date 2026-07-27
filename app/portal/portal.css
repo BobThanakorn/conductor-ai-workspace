@@ -1,4 +1,5 @@
 .portal-shell {
+  height: 100vh;
   min-height: 100vh;
   display: flex;
   overflow: hidden;
@@ -103,7 +104,7 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 .connection-card.offline strong { color: #9a4438; }
 .connection-card small { margin-top: 5px; color: #879087; font-size: 9px; line-height: 1.4; }
 
-.portal-main { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.portal-main { min-width: 0; min-height: 0; height: 100%; flex: 1; display: flex; flex-direction: column; }
 .portal-header {
   min-height: 70px;
   display: flex;
