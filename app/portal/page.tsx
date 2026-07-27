@@ -76,6 +76,21 @@ function flattenFiles(entries: FileEntry[]): FileEntry[] {
   );
 }
 
+/**
+ * A provider can occasionally return a prose-only plan even after being asked
+ * for a structured batch. Preserve the user's exact, bounded commands as a
+ * reviewable proposal rather than silently dropping the runnable request.
+ */
+function explicitCommandBatch(message: string): ExecutionStep[] {
+  const commandPrefix = /^(?:python(?:3)?|node|npm|npx|pytest|go|cargo|dotnet|ruby|php|bash|sh)\b/i;
+  const normalized = message
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^(?:[-*]|\d+[.)])\s*/, ""))
+    .filter((line) => commandPrefix.test(line))
+    .filter((line) => line.length <= 4_000 && !/[\u0000-\u001f\u007f;|&<>]/.test(line));
+  return [...new Set(normalized)].slice(0, 8).map((command) => ({ command, args: [], timeoutMs: 120_000 }));
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   const data = await response.json() as T & { error?: string | { message?: string } };
   if (!response.ok) {
@@ -326,18 +341,32 @@ export default function PortalPage() {
       );
       if (!data.output) throw new Error("The provider returned no Agent output.");
       const output = data.output;
+      const fallbackExecutions = agentMode === "agent" &&
+        !output.execution &&
+        !output.executions?.length
+        ? explicitCommandBatch(message)
+        : [];
+      const proposalOutput = fallbackExecutions.length
+        ? {
+            ...output,
+            summary: `${output.summary} A reviewed command batch was reconstructed from the exact commands in your request.`,
+            executions: fallbackExecutions,
+            riskLevel: "R1",
+            needsApproval: true,
+          }
+        : output;
       setMessages((current) => [...current, {
         id: `${key}-response`,
         role: "assistant",
-        text: output.summary,
-        plan: output.plan,
+        text: proposalOutput.summary,
+        plan: proposalOutput.plan,
       }]);
       if (agentMode === "agent" && (
-        output.artifacts?.length ||
-        output.execution ||
-        output.executions?.length
+        proposalOutput.artifacts?.length ||
+        proposalOutput.execution ||
+        proposalOutput.executions?.length
       )) {
-        setProposal(output);
+        setProposal(proposalOutput);
       }
       await refresh();
     } catch (failure) {
