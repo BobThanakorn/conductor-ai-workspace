@@ -88,7 +88,12 @@ function explicitCommandBatch(message: string): ExecutionStep[] {
     .map((line) => line.trim().replace(/^(?:[-*]|\d+[.)])\s*/, ""))
     .filter((line) => commandPrefix.test(line))
     .filter((line) => line.length <= 4_000 && !/[\u0000-\u001f\u007f;|&<>]/.test(line));
-  return [...new Set(normalized)].slice(0, 8).map((command) => ({ command, args: [], timeoutMs: 120_000 }));
+  return [...new Set(normalized)].slice(0, 8).map((command) => ({ command: normalizeExecutionCommand(command), args: [], timeoutMs: 120_000 }));
+}
+
+/** The Linux companion image provides python3; accept the friendlier `python` spelling in prompts. */
+function normalizeExecutionCommand(command: string): string {
+  return command.trim().replace(/^python(?=\s|$)/i, "python3");
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -407,8 +412,8 @@ export default function PortalPage() {
       }
       if (executions.length) {
         const commands = executions.map((execution) => ({
-          command: execution.command?.trim() ||
-            `python "${execution.entrypoint ?? ""}" ${(execution.args ?? []).map((arg) => JSON.stringify(arg)).join(" ")}`.trim(),
+          command: normalizeExecutionCommand(execution.command?.trim() ||
+            `python "${execution.entrypoint ?? ""}" ${(execution.args ?? []).map((arg) => JSON.stringify(arg)).join(" ")}`.trim()),
           cwd: ".",
           timeoutMs: execution.timeoutMs ?? 120_000,
         }));
