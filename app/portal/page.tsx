@@ -685,7 +685,27 @@ export default function PortalPage() {
 
   return (
     <main className="portal-shell">
-      <aside className="portal-sidebar" aria-label="Workspace navigation">
+      <header className="desktop-titlebar">
+        <div className="desktop-brand" aria-label="Conductor">C</div>
+        <nav aria-label="Application menu">
+          <button type="button" onClick={() => void cloneRepository()} disabled={busy || !companionReady}>File</button>
+          <button type="button" onClick={() => document.querySelector<HTMLTextAreaElement>(".portal-composer textarea")?.focus()}>Edit</button>
+          <button type="button" onClick={() => setWorkspaceOpen((open) => !open)}>View</button>
+          <button type="button" onClick={() => window.alert("New task: Ctrl+N · Focus prompt: Ctrl+L · Send: Ctrl+Enter")}>Help</button>
+        </nav>
+        <div className="desktop-title">Conductor AI Environment</div>
+      </header>
+
+      <div className="portal-body">
+      <nav className="activity-rail" aria-label="Primary tools">
+        <button type="button" className="active" aria-label="Repositories" title="Repositories" onClick={() => setActiveTab("project")}>▱</button>
+        <button type="button" aria-label="New Agent" title="New Agent" onClick={() => void createTask()} disabled={busy}>⌁</button>
+        <button type="button" aria-label="Search repositories" title="Search" onClick={() => document.querySelector<HTMLInputElement>(".repository-filter")?.focus()}>⌕</button>
+        <span />
+        <button type="button" aria-label="Toggle repository files" title="Toggle repository files" onClick={() => setWorkspaceOpen((open) => !open)}>▤</button>
+      </nav>
+
+      <aside className="portal-sidebar" aria-label="Repository navigation">
         <div className="repository-sidebar-heading">
           <div className="portal-label">REPOSITORIES</div>
           <div>
@@ -981,6 +1001,7 @@ export default function PortalPage() {
           {!workspaceOpen && <button className="workspace-reopen" type="button" onClick={() => setWorkspaceOpen(true)}>▱ Repository</button>}
         </div>
       </section>
+      </div>
     </main>
   );
 }

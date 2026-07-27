@@ -1,7 +1,8 @@
 .portal-shell {
   height: 100vh;
   min-height: 100vh;
-  display: flex;
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
   overflow: hidden;
   color: #30352e;
   background: #f7f5ee;
@@ -11,20 +12,87 @@
 button, input, textarea, select { font: inherit; }
 button:disabled { cursor: not-allowed !important; opacity: .52; }
 
+.desktop-titlebar {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  color: #d7d7d7;
+  border-bottom: 1px solid #2b2b2b;
+  background: #181818;
+  user-select: none;
+}
+.desktop-brand {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
+  color: #161616;
+  background: #f07b65;
+  font-size: 12px;
+  font-weight: 900;
+}
+.desktop-titlebar nav { display: flex; gap: 2px; }
+.desktop-titlebar button {
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 5px;
+  color: #d7d7d7;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.desktop-titlebar button:hover { background: #303030; }
+.desktop-title { justify-self: center; color: #858585; font-size: 11px; }
+.portal-body { min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.activity-rail {
+  width: 48px;
+  flex: 0 0 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 7px 0 9px;
+  border-right: 1px solid #292929;
+  background: #181818;
+}
+.activity-rail button {
+  position: relative;
+  width: 48px;
+  height: 45px;
+  border: 0;
+  color: #9c9c9c;
+  background: transparent;
+  cursor: pointer;
+  font-size: 21px;
+}
+.activity-rail button:hover { color: #f0f0f0; }
+.activity-rail button.active { color: #f0f0f0; }
+.activity-rail button.active::before {
+  content: "";
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 2px;
+  background: #f07b65;
+}
+.activity-rail span { flex: 1; }
+
 .portal-sidebar {
-  width: 292px;
-  flex: 0 0 292px;
+  width: 286px;
+  flex: 0 0 286px;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  padding: 24px 16px 18px;
-  border-right: 1px solid #e0dfd7;
-  background: #fbfaf6;
+  padding: 17px 10px 12px;
+  color: #cccccc;
+  border-right: 1px solid #292929;
+  background: #1f1f1f;
 }
 
 .portal-label {
   margin: 0 7px 10px;
-  color: #a0a198;
+  color: #8d8d8d;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .14em;
@@ -49,20 +117,21 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   background: transparent;
   cursor: pointer;
 }
-.repository-sidebar-heading button:hover { background: #efeee8; }
+.repository-sidebar-heading button:hover { color: #fff; background: #343434; }
+.repository-sidebar-heading button { color: #a7a7a7; }
 .repository-filter {
   width: 100%;
   box-sizing: border-box;
   margin-bottom: 8px;
   padding: 8px 9px;
-  border: 1px solid #deddd5;
-  border-radius: 8px;
-  color: #444b42;
-  background: #fffefb;
+  border: 1px solid #3d3d3d;
+  border-radius: 5px;
+  color: #d4d4d4;
+  background: #181818;
   outline: none;
   font-size: 10px;
 }
-.repository-filter:focus { border-color: #9bc9a6; box-shadow: 0 0 0 2px #edf7ee; }
+.repository-filter:focus { border-color: #6f91b9; box-shadow: 0 0 0 1px #6f91b9; }
 .repository-list { max-height: 34vh; overflow: auto; }
 .repository-item {
   display: flex;
@@ -73,29 +142,29 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   padding: 9px 8px;
   border: 0;
   border-radius: 9px;
-  color: #555c53;
+  color: #cccccc;
   background: transparent;
   cursor: pointer;
   text-align: left;
 }
-.repository-item:hover { background: #f1f0ea; }
-.repository-item.selected { color: #2e4e37; background: #eaf3ea; }
-.repository-folder { padding-top: 1px; color: #747b72; }
+.repository-item:hover { background: #2a2d2e; }
+.repository-item.selected { color: #fff; background: #37373d; }
+.repository-folder { padding-top: 1px; color: #b7b7b7; }
 .repository-item > span:last-child { min-width: 0; flex: 1; }
 .repository-item strong, .repository-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repository-item strong { font-size: 11px; }
-.repository-item small { margin-top: 3px; color: #979b93; font-size: 9px; }
+.repository-item small { margin-top: 3px; color: #8b8b8b; font-size: 9px; }
 .repository-item em {
   display: flex;
   justify-content: space-between;
   gap: 8px;
   margin-top: 7px;
-  color: #6d736b;
+  color: #b9b9b9;
   font-size: 9px;
   font-style: normal;
 }
 .repository-item em span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repository-item time { flex: 0 0 auto; color: #a1a49d; }
+.repository-item time { flex: 0 0 auto; color: #858585; }
 
 .project-card {
   display: flex;
@@ -133,11 +202,12 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   padding: 12px 14px;
   border: 0;
   border-radius: 11px;
-  color: white;
-  background: #15813e;
+  color: #f2f2f2;
+  background: #313131;
   cursor: pointer;
   font-weight: 750;
 }
+.new-chat:hover { background: #3b3b3b; }
 
 .task-list { overflow: auto; }
 .recent-chat {
@@ -154,25 +224,27 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   cursor: pointer;
   text-align: left;
 }
-.recent-chat.selected { background: #edf5ed; }
+.recent-chat { color: #cccccc; }
+.recent-chat:hover { background: #2a2d2e; }
+.recent-chat.selected { background: #37373d; }
 .recent-chat i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #cca12c; }
 .recent-chat span { min-width: 0; }
 .recent-chat strong, .recent-chat small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-chat strong { color: #4a5148; font-size: 12px; }
-.recent-chat small { margin-top: 3px; color: #a0a29a; font-size: 10px; }
+.recent-chat strong { color: #d4d4d4; font-size: 12px; }
+.recent-chat small { margin-top: 3px; color: #858585; font-size: 10px; }
 .sidebar-spacer { flex: 1; }
 .empty-copy { color: #92978f; font-size: 12px; line-height: 1.5; }
 .connection-card {
   padding: 12px;
-  border: 1px solid #dae7db;
+  border: 1px solid #355b40;
   border-radius: 10px;
-  background: #f1f8f1;
+  background: #203426;
 }
 .connection-card.offline { border-color: #ecd5cf; background: #fff4f1; }
 .connection-card strong, .connection-card small { display: block; }
-.connection-card strong { color: #3d6547; font-size: 11px; }
+.connection-card strong { color: #8fd19e; font-size: 11px; }
 .connection-card.offline strong { color: #9a4438; }
-.connection-card small { margin-top: 5px; color: #879087; font-size: 9px; line-height: 1.4; }
+.connection-card small { margin-top: 5px; color: #9a9f9b; font-size: 9px; line-height: 1.4; }
 
 .portal-main { min-width: 0; min-height: 0; height: 100%; flex: 1; display: flex; flex-direction: column; }
 .portal-header {
@@ -415,6 +487,55 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 .repository-form label { display: flex; gap: 5px; font-size: 11px; }
 .form-help { color: #878c84; font-size: 10px; }
 
+/* Cursor-style workbench skin. Keep the existing live controls and data flow,
+   but render them as one coherent desktop IDE surface. */
+.portal-main { color: #d4d4d4; background: #181818; }
+.portal-header { min-height: 48px; padding: 0 14px; border-color: #2b2b2b; background: #181818; }
+.portal-tabs { padding: 2px; border-radius: 7px; background: #252526; }
+.portal-tabs button { padding: 7px 13px; border-radius: 5px; color: #a8a8a8; font-size: 11px; }
+.portal-tabs button.active { color: #fff; background: #37373d; box-shadow: none; }
+.header-status, .refresh-button { color: #999; }
+.portal-content, .chat-column { background: #1e1e1e; }
+.assistant-heading strong, .empty-state h2 { color: #e1e1e1; }
+.assistant-heading small, .empty-state, .message-meta, .typing { color: #8c8c8c; }
+.portal-message p { color: #d0d0d0; }
+.portal-message ol { color: #b8b8b8; }
+.portal-composer {
+  border-color: #464646;
+  border-radius: 10px;
+  background: #252526;
+  box-shadow: 0 8px 22px #0005;
+}
+.portal-composer textarea { color: #ededed; }
+.portal-composer textarea::placeholder { color: #858585; }
+.composer-toolbar button, .composer-toolbar select { border-color: #454545; color: #b6b6b6; background: #2d2d2d; }
+.composer-toolbar button.selected { border-color: #60836a; color: #a9d5b1; background: #24352a; }
+.proposal-card { border-color: #46694f; color: #d5d5d5; background: #202d24; }
+.proposal-card code { color: #d7eadb; background: #18231b; }
+.proposal-actions button { border-color: #555; color: #ddd; background: #2d2d2d; }
+.execution-result { border-color: #3c3c3c; background: #252526; box-shadow: none; }
+.execution-result-heading { border-color: #3b3b3b; background: #2a2a2b; }
+.execution-step + .execution-step { border-color: #3b3b3b; }
+.execution-step-meta code { color: #d0d0d0; }
+.portal-workspace { color: #ccc; border-color: #2b2b2b; background: #181818; }
+.workspace-heading { border-color: #333; }
+.workspace-file-filter { border-color: #3d3d3d; color: #d4d4d4; background: #202020; }
+.workspace-file { color: #bcbcbc; }
+.workspace-file:hover { background: #2a2d2e; }
+.workspace-file.active { color: #fff; background: #37373d; }
+.workspace-divider { background: #333; }
+.attach-current, .open-old-workspace { border-color: #3f6048; color: #9ed0a8; background: #203026; }
+.real-panel, .real-panel h1, .real-panel h2 { color: #d5d5d5; }
+.git-summary, .runtime-grid div { border-color: #3b3b3b; background: #252526; }
+.git-files li { border-color: #343434; }
+.git-files button { color: #9bc8a5; }
+.git-actions input, .repository-form input[type="text"], .repository-form input:not([type]) {
+  border-color: #444;
+  color: #ddd;
+  background: #252526;
+}
+.portal-error { border-color: #6f332d; color: #ffb5aa; background: #3b1f1c; }
+
 @media (max-width: 1000px) {
   .portal-sidebar { width: 235px; flex-basis: 235px; }
   .portal-workspace { width: 285px; flex-basis: 285px; }
@@ -422,6 +543,8 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 }
 
 @media (max-width: 760px) {
+  .desktop-title { display: none; }
+  .activity-rail { display: none; }
   .portal-sidebar { display: none; }
   /* Keep repository files discoverable on narrow screens. The file panel is
      intentionally overlaid instead of disappearing behind a responsive rule. */
