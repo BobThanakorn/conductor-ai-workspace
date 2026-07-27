@@ -35,6 +35,12 @@ yarn-error.log*
 secret.*
 !secret.*.example
 
+# local credentials and generated deployment bundles
+*.tar.gz
+*.tsbuildinfo
+docker-compose.override.yml
+docker-compose.override.yaml
+
 # vercel
 .vercel
 

@@ -419,9 +419,17 @@ export async function loadWorkspaceState(
             ? `SELECT id, task_id, mode, model, output_json, created_at
                FROM agent_runs WHERE workspace_id = ? AND task_id = ? ORDER BY created_at DESC LIMIT 10`
             : `SELECT id, task_id, mode, model, output_json, created_at
-               FROM agent_runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 10`,
+               FROM agent_runs
+               WHERE workspace_id = ?
+                 AND task_id = (
+                   SELECT id FROM tasks
+                   WHERE workspace_id = ?
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT 1
+                 )
+               ORDER BY created_at DESC LIMIT 10`,
         )
-        .bind(...(selectedTaskId ? [workspaceId, selectedTaskId] : [workspaceId])),
+        .bind(...(selectedTaskId ? [workspaceId, selectedTaskId] : [workspaceId, workspaceId])),
     ]);
 
   const workspace = workspaceResult.results[0] as WorkspaceRow | undefined;
