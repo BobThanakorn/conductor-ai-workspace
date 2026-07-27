@@ -6,7 +6,9 @@ load_secret() {
   file="$2"
   if [ -f "$file" ]; then
     value="$(cat "$file")"
-    export "$variable=$value"
+    if [ -n "$value" ]; then
+      export "$variable=$value"
+    fi
   fi
 }
 
