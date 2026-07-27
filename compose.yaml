@@ -67,6 +67,8 @@ services:
       - type: bind
         source: ${WORKSPACE_PATH:-.}
         target: /workspace
+    secrets:
+      - github-token
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -89,3 +91,5 @@ secrets:
     file: ${OPENAI_API_KEY_FILE:-./secret.openai-api-key}
   azure-api-key:
     file: ${AZURE_AI_FOUNDRY_API_KEY_FILE:-./secret.azure-api-key}
+  github-token:
+    file: ${GITHUB_TOKEN_FILE:-./secret.github-token}
