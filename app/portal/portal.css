@@ -39,6 +39,7 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   margin-bottom: 7px;
 }
 .repository-sidebar-heading .portal-label { margin-bottom: 0; }
+.repository-sidebar-heading > div:last-child { display: flex; gap: 2px; }
 .repository-sidebar-heading button {
   width: 27px;
   height: 27px;

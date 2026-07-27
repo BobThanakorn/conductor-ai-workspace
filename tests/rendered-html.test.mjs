@@ -30,6 +30,9 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(portal, /\/provider\/github\/repository/);
   assert.match(portal, /Search repositories/);
   assert.match(portal, /Connect current repository/);
+  assert.match(portal, /Clone GitHub repository/);
+  assert.match(portal, /\/workspace\/select/);
+  assert.match(portal, /\/git\/clone/);
   assert.match(repositoriesRoute, /listRepositories/);
   assert.match(repositoriesRoute, /registerRepository/);
   assert.doesNotMatch(portal, /DTS Assistant|6 active|hello\.txt|next integration phase|พร้อมต่อยอด/);

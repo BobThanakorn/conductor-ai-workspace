@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdir, stat } from "node:fs/promises";
+import path from "node:path";
 
 import { approveAction, consumeApproval, requestApproval } from "./approval-store";
 import {
@@ -15,6 +17,7 @@ import { normalizeRepositoryRelativePath } from "./workspace-path";
 const PORT = Number(process.env.CONDUCTOR_COMPANION_PORT ?? 8765);
 const HOST = process.env.CONDUCTOR_COMPANION_HOST ?? "127.0.0.1";
 const ROOT = process.env.CONDUCTOR_WORKSPACE_ROOT ?? process.cwd();
+let activeRoot = path.resolve(ROOT);
 const MAX_BODY_BYTES = 4_500_000;
 const ALLOWED_ORIGINS = new Set(
   (process.env.CONDUCTOR_ALLOWED_ORIGINS ?? "http://localhost:3000,http://127.0.0.1:3000")
@@ -23,6 +26,19 @@ const ALLOWED_ORIGINS = new Set(
     .filter(Boolean),
 );
 type JsonRecord = Record<string, unknown>;
+
+async function selectWorkspaceRoot(requested: string) {
+  const resolved = path.resolve(requested);
+  const base = path.resolve(ROOT);
+  if (resolved !== base && !resolved.startsWith(`${base}${path.sep}`)) {
+    throw new Error("Repository path must stay inside the companion workspace.");
+  }
+  const metadata = await stat(resolved);
+  if (!metadata.isDirectory()) throw new Error("Repository path is not a directory.");
+  await stat(path.join(resolved, ".git"));
+  activeRoot = resolved;
+  return activeRoot;
+}
 
 function send(response: ServerResponse, status: number, body: JsonRecord) {
   response.writeHead(status, {
@@ -87,7 +103,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      const [top, branch] = await Promise.all([runGit(ROOT, ["rev-parse", "--show-toplevel"]), runGit(ROOT, ["branch", "--show-current"])]);
+      const [top, branch] = await Promise.all([runGit(activeRoot, ["rev-parse", "--show-toplevel"]), runGit(activeRoot, ["branch", "--show-current"])]);
       const githubConfigured = Boolean(process.env.GITHUB_TOKEN?.trim());
       return send(response, 200, {
         ok: true,
@@ -105,6 +121,49 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       });
     }
 
+    if (request.method === "POST" && url.pathname === "/workspace/select") {
+      const body = await readBody(request);
+      if (typeof body.path !== "string" || !body.path.trim()) throw new Error("path is required.");
+      const root = await selectWorkspaceRoot(body.path);
+      const [branch, head] = await Promise.all([
+        runGit(root, ["branch", "--show-current"]),
+        runGit(root, ["rev-parse", "--short=12", "HEAD"]),
+      ]);
+      return send(response, 200, {
+        ok: true,
+        root,
+        branch: branch.stdout.trim(),
+        head: head.stdout.trim(),
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/git/clone") {
+      const body = await approvedBody(request, "git.clone");
+      const repositoryUrl = typeof body.url === "string" ? body.url.trim() : "";
+      const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(repositoryUrl);
+      if (!match) throw new Error("Only HTTPS GitHub repository URLs are supported.");
+      const directoryName = match[2];
+      const repositoriesRoot = path.join(path.resolve(ROOT), "repositories");
+      await mkdir(repositoriesRoot, { recursive: true });
+      const target = path.join(repositoriesRoot, directoryName);
+      if (target !== repositoriesRoot && !target.startsWith(`${repositoriesRoot}${path.sep}`)) {
+        throw new Error("Clone target escapes the repositories directory.");
+      }
+      await runGit(repositoriesRoot, ["clone", "--", repositoryUrl, directoryName], 180_000);
+      await selectWorkspaceRoot(target);
+      const [branch, head] = await Promise.all([
+        runGit(activeRoot, ["branch", "--show-current"]),
+        runGit(activeRoot, ["rev-parse", "--short=12", "HEAD"]),
+      ]);
+      return send(response, 200, {
+        ok: true,
+        name: directoryName,
+        root: activeRoot,
+        branch: branch.stdout.trim(),
+        head: head.stdout.trim(),
+      });
+    }
+
     if (request.method === "POST" && url.pathname === "/approvals/request") {
       const body = await readBody(request);
       if (typeof body.action !== "string" || !body.input || typeof body.input !== "object") throw new Error("action and input are required.");
@@ -119,41 +178,41 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
     if (request.method === "GET" && url.pathname === "/fs/tree") {
       const requested = url.searchParams.get("path") ?? ".";
       const depth = Number(url.searchParams.get("depth") ?? 5);
-      return send(response, 200, { ok: true, root: ROOT, entries: await listWorkspace(ROOT, requested, depth) });
+      return send(response, 200, { ok: true, root: activeRoot, entries: await listWorkspace(activeRoot, requested, depth) });
     }
     if (request.method === "POST" && url.pathname === "/fs/read") {
       const body = await readBody(request);
       if (typeof body.path !== "string") throw new Error("path is required.");
-      return send(response, 200, { ok: true, ...(await readWorkspaceFile(ROOT, body.path)) });
+      return send(response, 200, { ok: true, ...(await readWorkspaceFile(activeRoot, body.path)) });
     }
     if (request.method === "POST" && url.pathname === "/fs/write") {
       const body = await approvedBody(request, "fs.write");
-      return send(response, 200, { ok: true, written: await writeWorkspaceFiles(ROOT, body.files) });
+      return send(response, 200, { ok: true, written: await writeWorkspaceFiles(activeRoot, body.files) });
     }
     if (request.method === "POST" && url.pathname === "/fs/delete") {
       const body = await approvedBody(request, "fs.delete");
-      return send(response, 200, { ok: true, deleted: await deleteWorkspacePaths(ROOT, body.paths) });
+      return send(response, 200, { ok: true, deleted: await deleteWorkspacePaths(activeRoot, body.paths) });
     }
     if (request.method === "POST" && url.pathname === "/terminal/execute") {
       const body = await approvedBody(request, "terminal.execute");
-      return send(response, 200, { ok: true, ...(await runShell(ROOT, body)) });
+      return send(response, 200, { ok: true, ...(await runShell(activeRoot, body)) });
     }
     if (request.method === "POST" && url.pathname === "/terminal/execute-batch") {
       const body = await approvedBody(request, "terminal.execute-batch");
-      return send(response, 200, { ok: true, ...(await runShellBatch(ROOT, body)) });
+      return send(response, 200, { ok: true, ...(await runShellBatch(activeRoot, body)) });
     }
 
     if (request.method === "GET" && url.pathname === "/git/status") {
       const [top, branch, head, status, remotes] = await Promise.all([
-        runGit(ROOT, ["rev-parse", "--show-toplevel"]), runGit(ROOT, ["branch", "--show-current"]),
-        runGit(ROOT, ["rev-parse", "--short=12", "HEAD"]), runGit(ROOT, ["status", "--short"]), runGit(ROOT, ["remote", "-v"]),
+        runGit(activeRoot, ["rev-parse", "--show-toplevel"]), runGit(activeRoot, ["branch", "--show-current"]),
+        runGit(activeRoot, ["rev-parse", "--short=12", "HEAD"]), runGit(activeRoot, ["status", "--short"]), runGit(activeRoot, ["remote", "-v"]),
       ]);
       return send(response, 200, { ok: true, root: top.stdout.trim(), branch: branch.stdout.trim(), head: head.stdout.trim(), files: parseStatus(status.stdout), raw: status.stdout, remotes: remotes.stdout });
     }
     if (request.method === "POST" && url.pathname === "/git/diff") {
       const body = await readBody(request);
       const paths = Array.isArray(body.paths) && body.paths.length ? normalizePaths(body.paths) : [];
-      const result = await runGit(ROOT, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--", ...paths]);
+      const result = await runGit(activeRoot, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--", ...paths]);
       return send(response, 200, { ok: true, stdout: result.stdout, stderr: result.stderr });
     }
     if (request.method === "POST" && url.pathname === "/git/commit") {
@@ -161,9 +220,9 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       const paths = normalizePaths(body.paths);
       const message = typeof body.message === "string" ? body.message.trim() : "";
       if (!message || message.length > 200) throw new Error("message must be 1 to 200 characters.");
-      await runGit(ROOT, ["add", "--", ...paths]);
-      const result = await runGit(ROOT, ["commit", "-m", message]);
-      const head = await runGit(ROOT, ["rev-parse", "--short=12", "HEAD"]);
+      await runGit(activeRoot, ["add", "--", ...paths]);
+      const result = await runGit(activeRoot, ["commit", "-m", message]);
+      const head = await runGit(activeRoot, ["rev-parse", "--short=12", "HEAD"]);
       return send(response, 200, { ok: true, head: head.stdout.trim(), stdout: result.stdout, stderr: result.stderr });
     }
     if (request.method === "POST" && url.pathname === "/git/action") {
@@ -175,7 +234,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
         if (typeof item !== "string" || item.length > 256 || item.includes("\0")) throw new Error("Invalid Git argument.");
         return item;
       }) : [];
-      const result = await runGit(ROOT, [operation, ...args], 120_000);
+      const result = await runGit(activeRoot, [operation, ...args], 120_000);
       return send(response, 200, { ok: true, stdout: result.stdout, stderr: result.stderr });
     }
     if (request.method === "POST" && url.pathname === "/provider/github/pull-request") {

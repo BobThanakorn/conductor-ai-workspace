@@ -381,8 +381,63 @@ export default function PortalPage() {
     }
   }
 
-  function selectRepository(repositoryId: string) {
+  async function cloneRepository() {
+    const repositoryUrl = window.prompt("GitHub repository URL (HTTPS)");
+    if (!repositoryUrl?.trim()) return;
+    if (!window.confirm(`Clone ${repositoryUrl.trim()} into the isolated workspace?`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const cloned = await approvedCompanionAction<{
+        name: string;
+        root: string;
+        branch: string;
+        head: string;
+      }>("git.clone", "/git/clone", { url: repositoryUrl.trim() });
+      const registered = await readJson<{ repository: { id: string } }>(
+        await fetch("/api/repositories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: cloned.name,
+            path: cloned.root,
+            provider: "github",
+            defaultBranch: cloned.branch || "main",
+            activeBranch: cloned.branch || "main",
+            baseSha: cloned.head,
+            headSha: cloned.head,
+          }),
+        }),
+      );
+      setSelectedWorkspaceId(registered.repository.id);
+      setSelectedTaskId("");
+      setMessages([]);
+      setProposal(null);
+      setExecutionResults([]);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Repository clone failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function selectRepository(repositoryId: string) {
     if (repositoryId === selectedWorkspaceId) return;
+    const repository = repositories.find((item) => item.id === repositoryId);
+    if (!repository) return;
+    setBusy(true);
+    setError("");
+    try {
+      await readJson(
+        await fetch(`${COMPANION_URL}/workspace/select`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: repository.path }),
+        }),
+      );
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Repository runtime selection failed.");
+    }
     setSelectedWorkspaceId(repositoryId);
     setSelectedTaskId("");
     setWorkspace({});
@@ -390,6 +445,7 @@ export default function PortalPage() {
     setProposal(null);
     setExecutionResults([]);
     setContextFiles([]);
+    setBusy(false);
   }
 
   function selectTask(taskId: string) {
@@ -632,7 +688,10 @@ export default function PortalPage() {
       <aside className="portal-sidebar" aria-label="Workspace navigation">
         <div className="repository-sidebar-heading">
           <div className="portal-label">REPOSITORIES</div>
-          <button type="button" onClick={() => void connectCurrentRepository()} disabled={busy || !companionReady} aria-label="Connect current repository">＋</button>
+          <div>
+            <button type="button" onClick={() => void connectCurrentRepository()} disabled={busy || !companionReady} aria-label="Connect current repository">▣</button>
+            <button type="button" onClick={() => void cloneRepository()} disabled={busy || !companionReady} aria-label="Clone GitHub repository">＋</button>
+          </div>
         </div>
         <input
           className="repository-filter"
