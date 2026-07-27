@@ -563,14 +563,15 @@ export default function PortalPage() {
           <div className="chat-column">
             {activeTab === "chat" && (
               <>
-                <div className="assistant-heading">
+                <div className="chat-scroll">
+                  <div className="assistant-heading">
                   <span className="assistant-avatar">AI</span>
                   <div>
                     <strong>Conductor Agent</strong>
                     <small>{activeTask?.title || "Create a task to begin"}</small>
                   </div>
-                </div>
-                <div className="message-list">
+                  </div>
+                  <div className="message-list">
                   {!messages.length && (
                     <div className="empty-state">
                       <h2>Ready when the runtime is ready</h2>
@@ -618,7 +619,7 @@ export default function PortalPage() {
                     </article>
                   )}
                   {busy && <div className="typing"><span /><span /><span /> Processing…</div>}
-                </div>
+                  </div>
 
                 {proposal && (
                   <section className="proposal-card">
@@ -648,6 +649,7 @@ export default function PortalPage() {
                     </div>
                   </section>
                 )}
+                </div>
 
                 <form className="portal-composer" onSubmit={sendMessage}>
                   <textarea

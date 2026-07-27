@@ -137,7 +137,8 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 }
 
 .portal-content { min-height: 0; flex: 1; display: flex; }
-.chat-column { min-width: 0; flex: 1; display: flex; flex-direction: column; padding: 28px 4vw 18px; overflow: auto; }
+.chat-column { min-width: 0; flex: 1; display: flex; flex-direction: column; padding: 28px 4vw 18px; overflow: hidden; }
+.chat-scroll { min-height: 0; flex: 1; overflow: auto; scrollbar-gutter: stable; }
 .assistant-heading {
   display: flex;
   align-items: center;
@@ -224,12 +225,10 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 .proposal-actions button:last-child { border-color: #177b3b; color: white; background: #177b3b; }
 
 .portal-composer {
-  position: sticky;
-  z-index: 5;
-  bottom: 0;
+  flex: 0 0 auto;
   width: min(820px, 100%);
   box-sizing: border-box;
-  margin: auto auto 0;
+  margin: 12px auto 0;
   padding: 11px 13px 10px;
   border: 1px solid #d8d7cf;
   border-radius: 16px;
