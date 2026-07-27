@@ -101,19 +101,30 @@ const executionArgumentSchema = z
 
 export const pythonExecutionSchema = z
   .object({
-    entrypoint: z
-      .string()
-      .min(1)
-      .max(200)
-      .refine(isSafeArtifactPath, {
-        message: "entrypoint must be relative and traversal-free",
-      }),
+    // Execution-only proposals may have a complete reviewed command without
+    // creating a new artifact. Keep an entrypoint when one is meaningful, but
+    // do not force the model to invent one for a command batch.
+    entrypoint: z.string().min(1).max(200).optional(),
     command: z.string().max(4_000).optional(),
     args: z.array(executionArgumentSchema).max(MAX_EXECUTION_ARGS),
     timeoutMs: z.number().int().min(100).max(MAX_EXECUTION_TIMEOUT_MS),
   })
   .strict()
   .superRefine((execution, context) => {
+    if (!execution.entrypoint && !execution.command) {
+      context.addIssue({
+        code: "custom",
+        path: ["command"],
+        message: "execution requires an entrypoint or an explicit command",
+      });
+    }
+    if (execution.entrypoint && !execution.command && !isSafeArtifactPath(execution.entrypoint)) {
+      context.addIssue({
+        code: "custom",
+        path: ["entrypoint"],
+        message: "entrypoint must be relative and traversal-free when no explicit command is supplied",
+      });
+    }
     const totalArgumentChars = execution.args.reduce(
       (total, argument) => total + argument.length,
       0,
@@ -123,6 +134,20 @@ export const pythonExecutionSchema = z
         code: "custom",
         path: ["args"],
         message: "combined argument length cannot exceed 2048 characters",
+      });
+    }
+  });
+
+const batchExecutionSchema = z
+  .array(pythonExecutionSchema)
+  .min(1)
+  .max(8)
+  .superRefine((executions, context) => {
+    const combinedTimeout = executions.reduce((total, execution) => total + execution.timeoutMs, 0);
+    if (combinedTimeout > MAX_EXECUTION_TIMEOUT_MS * 8) {
+      context.addIssue({
+        code: "custom",
+        message: `combined execution timeout cannot exceed ${MAX_EXECUTION_TIMEOUT_MS * 8} ms`,
       });
     }
   });
@@ -140,6 +165,10 @@ export const agentProposalSchema = z
     evidence: z.array(z.string().min(1).max(320)).max(12),
     artifacts: z.array(pythonArtifactSchema).max(MAX_AGENT_ARTIFACTS),
     execution: pythonExecutionSchema.nullable(),
+    // A batch is for bounded, sequential verification of existing or newly
+    // proposed workspace artifacts. It is optional to preserve compatibility
+    // with single-command proposals.
+    executions: batchExecutionSchema.optional(),
   })
   .strict()
   .superRefine((proposal, context) => {
@@ -163,12 +192,21 @@ export const agentProposalSchema = z
         message: `combined artifact content cannot exceed ${MAX_TOTAL_ARTIFACT_CONTENT_BYTES} UTF-8 bytes`,
       });
     }
-    if (proposal.execution && !paths.has(proposal.execution.entrypoint) && !proposal.execution.command) {
+    if (proposal.execution?.entrypoint && !paths.has(proposal.execution.entrypoint) && !proposal.execution.command) {
       context.addIssue({
         code: "custom",
         path: ["execution", "entrypoint"],
         message: "execution entrypoint must match one proposed artifact unless an explicit command is supplied",
       });
+    }
+    for (const [index, execution] of (proposal.executions ?? []).entries()) {
+      if (execution.entrypoint && !paths.has(execution.entrypoint) && !execution.command) {
+        context.addIssue({
+          code: "custom",
+          path: ["executions", index, "entrypoint"],
+          message: "batch execution entrypoint must match one proposed artifact unless an explicit command is supplied",
+        });
+      }
     }
   });
 
@@ -249,9 +287,14 @@ export function assessAgentProposal(value: unknown): ProposalAssessment {
   const sensitiveText = [
     ...narrativeText,
     ...proposal.artifacts.flatMap((artifact) => [artifact.path, artifact.content]),
-        ...(proposal.execution
-      ? [proposal.execution.entrypoint, proposal.execution.command ?? "", ...proposal.execution.args]
+    ...(proposal.execution
+      ? [proposal.execution.entrypoint ?? "", proposal.execution.command ?? "", ...proposal.execution.args]
       : []),
+    ...(proposal.executions ?? []).flatMap((execution) => [
+      execution.entrypoint ?? "",
+      execution.command ?? "",
+      ...execution.args,
+    ]),
   ];
   const reasons: string[] = [];
 
@@ -286,7 +329,7 @@ export function assessAgentProposal(value: unknown): ProposalAssessment {
   }
 
   const hasArtifactOrExecution =
-    proposal.artifacts.length > 0 || proposal.execution !== null;
+    proposal.artifacts.length > 0 || proposal.execution !== null || (proposal.executions?.length ?? 0) > 0;
   const requiresApproval =
     hasArtifactOrExecution || narrativeText.some(hasSideEffectLanguage);
   const riskLevel =

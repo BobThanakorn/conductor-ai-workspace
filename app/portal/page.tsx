@@ -28,18 +28,20 @@ type Task = {
   model?: string;
 };
 type AgentArtifact = { path: string; content: string; language: string };
+type ExecutionStep = {
+  entrypoint?: string;
+  command?: string;
+  args?: string[];
+  timeoutMs?: number;
+};
 type AgentProposal = {
   summary: string;
   plan?: string[];
   riskLevel?: string;
   needsApproval?: boolean;
   artifacts?: AgentArtifact[];
-  execution?: {
-    entrypoint: string;
-    command?: string;
-    args?: string[];
-    timeoutMs?: number;
-  } | null;
+  execution?: ExecutionStep | null;
+  executions?: ExecutionStep[];
 };
 type CompanionHealth = {
   ok?: boolean;
@@ -332,7 +334,8 @@ export default function PortalPage() {
       }]);
       if (agentMode === "agent" && (
         output.artifacts?.length ||
-        output.execution
+        output.execution ||
+        output.executions?.length
       )) {
         setProposal(output);
       }
@@ -351,44 +354,49 @@ export default function PortalPage() {
   }
 
   async function applyProposal() {
-    if (!proposal?.artifacts?.length) return;
+    if (!proposal) return;
+    const executions = [
+      ...(proposal.execution ? [proposal.execution] : []),
+      ...(proposal.executions ?? []),
+    ];
+    if (!(proposal.artifacts?.length || executions.length)) return;
     if (!window.confirm(
-      `Apply ${proposal.artifacts.length} reviewed file(s) to the local workspace${proposal.execution ? " and run the verification command" : ""}?`,
+      `Apply ${proposal.artifacts?.length ?? 0} reviewed file(s) to the local workspace${executions.length ? ` and run ${executions.length} reviewed command(s)` : ""}?`,
     )) return;
     setBusy(true);
     setError("");
     setTerminalOutput("");
     try {
-      await approvedCompanionAction(
-        "fs.write",
-        "/fs/write",
-        {
-          files: proposal.artifacts.map(({ path, content }) => ({ path, content })),
-        },
-      );
-      if (proposal.execution) {
-        const command = proposal.execution.command?.trim() ||
-          `python "${proposal.execution.entrypoint}" ${(proposal.execution.args ?? []).map((arg) => JSON.stringify(arg)).join(" ")}`.trim();
-        const result = await approvedCompanionAction<{
-          stdout: string;
-          stderr: string;
-          exitCode: number;
-        }>(
-          "terminal.execute",
-          "/terminal/execute",
+      if (proposal.artifacts?.length) {
+        await approvedCompanionAction(
+          "fs.write",
+          "/fs/write",
           {
-            command,
-            cwd: ".",
-            timeoutMs: proposal.execution.timeoutMs ?? 120_000,
+            files: proposal.artifacts.map(({ path, content }) => ({ path, content })),
           },
         );
-        setTerminalOutput([
-          `$ ${command}`,
-          result.stdout,
-          result.stderr,
-          `exit ${result.exitCode}`,
-        ].filter(Boolean).join("\n"));
-        if (result.exitCode !== 0) throw new Error("Verification command failed. Review the output below.");
+      }
+      if (executions.length) {
+        const commands = executions.map((execution) => ({
+          command: execution.command?.trim() ||
+            `python "${execution.entrypoint ?? ""}" ${(execution.args ?? []).map((arg) => JSON.stringify(arg)).join(" ")}`.trim(),
+          cwd: ".",
+          timeoutMs: execution.timeoutMs ?? 120_000,
+        }));
+        const result = await approvedCompanionAction<{
+          results: Array<{ command: string; stdout: string; stderr: string; exitCode: number; timedOut: boolean; durationMs: number }>;
+        }>(
+          "terminal.execute-batch",
+          "/terminal/execute-batch",
+          { commands },
+        );
+        setTerminalOutput(result.results.flatMap((item) => [
+          `$ ${item.command}`,
+          item.stdout,
+          item.stderr,
+          `exit ${item.exitCode}${item.timedOut ? " (timed out)" : ""} · ${item.durationMs} ms`,
+          "",
+        ]).filter(Boolean).join("\n"));
       }
       setProposal(null);
       await refresh();
@@ -551,7 +559,7 @@ export default function PortalPage() {
                 {proposal && (
                   <section className="proposal-card">
                     <div>
-                      <strong>Review proposed workspace changes</strong>
+                      <strong>{proposal.artifacts?.length ? "Review proposed workspace changes" : "Review proposed command batch"}</strong>
                       <small>{proposal.riskLevel || "R1"} · approval required</small>
                     </div>
                     <ul>
@@ -565,7 +573,9 @@ export default function PortalPage() {
                         </li>
                       ))}
                     </ul>
-                    {proposal.execution && <code>{proposal.execution.command || `python ${proposal.execution.entrypoint}`}</code>}
+                    {[...(proposal.execution ? [proposal.execution] : []), ...(proposal.executions ?? [])].map((execution, index) => (
+                      <code key={`${execution.entrypoint ?? "command"}-${index}`}>{execution.command || `python ${execution.entrypoint ?? ""} ${(execution.args ?? []).join(" ")}`}</code>
+                    ))}
                     <div className="proposal-actions">
                       <button type="button" onClick={() => setProposal(null)} disabled={busy}>Reject</button>
                       <button type="button" onClick={() => void applyProposal()} disabled={busy || !companionReady}>Approve, apply & run</button>

@@ -69,6 +69,23 @@ test("raises Python drafts and execution proposals to R1 with approval", () => {
   assert.equal(assessment.normalized, true);
 });
 
+test("accepts a bounded execution batch for existing workspace files", () => {
+  const assessment = assessAgentProposal({
+    ...readOnlyProposal,
+    summary: "Run the calculator checks in sequence after approval.",
+    proposedAction: "Run the reviewed calculator command batch.",
+    riskLevel: "R1",
+    needsApproval: true,
+    executions: [
+      { entrypoint: "calculator-cli/cli.py", command: "python calculator-cli/cli.py add 10 5", args: [], timeoutMs: 10_000 },
+      { entrypoint: "calculator-cli/cli.py", command: "python calculator-cli/cli.py divide 10 0", args: [], timeoutMs: 10_000 },
+    ],
+  });
+  assert.equal(assessment.proposal.executions?.length, 2);
+  assert.equal(assessment.proposal.needsApproval, true);
+  assert.equal(assessment.proposal.riskLevel, "R1");
+});
+
 test("accepts detailed implementation plans for complex coding tasks", () => {
   const proposal = agentProposalSchema.parse({
     summary: "Prepare a multi-step Python project proposal.",

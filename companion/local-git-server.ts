@@ -7,6 +7,7 @@ import {
   readWorkspaceFile,
   runGit,
   runShell,
+  runShellBatch,
   writeWorkspaceFiles,
 } from "./execution-plane";
 import { normalizeRepositoryRelativePath } from "./workspace-path";
@@ -136,6 +137,10 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
     if (request.method === "POST" && url.pathname === "/terminal/execute") {
       const body = await approvedBody(request, "terminal.execute");
       return send(response, 200, { ok: true, ...(await runShell(ROOT, body)) });
+    }
+    if (request.method === "POST" && url.pathname === "/terminal/execute-batch") {
+      const body = await approvedBody(request, "terminal.execute-batch");
+      return send(response, 200, { ok: true, ...(await runShellBatch(ROOT, body)) });
     }
 
     if (request.method === "GET" && url.pathname === "/git/status") {

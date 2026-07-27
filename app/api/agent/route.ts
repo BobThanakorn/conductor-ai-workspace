@@ -79,10 +79,10 @@ async function runLiveAgent(
       "Return a compact structured proposal only. Do not reveal private reasoning.",
       "Mark any local write or external side effect as R1 or higher and require approval.",
       "You may propose up to eight complete relative file drafts in artifacts for any programming language.",
-      "Set artifacts to [] for analysis-only requests. Set execution to null unless proposing one bounded verification command.",
+      "Set artifacts to [] for analysis-only requests. Set execution to null unless proposing one bounded verification command. For a requested sequence of up to eight bounded commands, set execution to null and return the commands in executions instead.",
       "Never use absolute paths or traversal. Keep commands scoped to the workspace and avoid destructive system-level operations.",
-      "For execution, provide the relevant relative entrypoint, arguments, timeout, and an optional explicit command such as npm test or python3 main.py.",
-      "The execution entrypoint must exactly match one proposed artifact path. Never use an interpreter name as the entrypoint.",
+      "For each execution, provide a relevant relative entrypoint, arguments, timeout, and an optional explicit command such as npm test or python3 main.py. Existing workspace files may be used for execution-only proposals when the explicit command names that relative file.",
+      "The execution entrypoint must exactly match one proposed artifact path when no explicit command is supplied. Never use an interpreter name as the entrypoint.",
       "An explicit command must be complete and non-interactive; never return only python, python3, node, npm, npx, or a shell name.",
       "All writes and commands are proposals; the local execution companion will require a payload-bound human approval before acting.",
       requestMode === "ask"
@@ -109,7 +109,7 @@ async function runLiveAgent(
       : "No active task is selected.",
     formatUntrustedWorkspaceFiles(workspaceFiles),
     formatUntrustedUserRequest(message),
-    "Respond with complete file drafts and a bounded verification command when implementation is requested. A draft or run is only a proposal and always requires approval.",
+    "Respond with complete file drafts and bounded verification commands when implementation is requested. For multiple requested commands, use executions with no more than eight sequential commands. A draft or run is only a proposal and always requires approval.",
   ].join("\n");
   const runner = new Runner({
     traceIncludeSensitiveData: false,

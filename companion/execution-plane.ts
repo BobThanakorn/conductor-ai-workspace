@@ -33,6 +33,10 @@ export type ProcessResult = {
   durationMs: number;
 };
 
+export type ProcessBatchResult = {
+  results: Array<ProcessResult & { command: string }>;
+};
+
 export function resolveWorkspacePath(root: string, requested: string) {
   const relative = normalizeRepositoryRelativePath(requested);
   const resolved = path.resolve(root, relative);
@@ -148,6 +152,46 @@ export async function runShell(root: string, input: Record<string, unknown>): Pr
       durationMs: Date.now() - started,
     };
   }
+}
+
+/**
+ * Runs a reviewed sequence one command at a time. Each command gets an
+ * independent timeout and result record; a non-zero exit never hides the
+ * results of later commands. The caller must still supply one approval token
+ * bound to the complete commands payload.
+ */
+export async function runShellBatch(root: string, input: Record<string, unknown>): Promise<ProcessBatchResult> {
+  const commands = input.commands;
+  if (!Array.isArray(commands) || commands.length < 1 || commands.length > 8) {
+    throw new Error("commands must contain 1 to 8 reviewed commands.");
+  }
+
+  let combinedTimeoutMs = 0;
+  const normalized = commands.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Each command must be an object.");
+    const value = item as Record<string, unknown>;
+    const command = typeof value.command === "string" ? value.command.trim() : "";
+    if (!command || command.length > 4_000 || command.includes("\0")) {
+      throw new Error("Each command must be a non-empty bounded command.");
+    }
+    const timeoutMs = Math.min(Math.max(Number(value.timeoutMs) || 30_000, 100), 300_000);
+    combinedTimeoutMs += timeoutMs;
+    return {
+      command,
+      timeoutMs,
+      ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}),
+    };
+  });
+  if (combinedTimeoutMs > 2_400_000) {
+    throw new Error("Combined command timeout cannot exceed 2400000 ms.");
+  }
+
+  const results: ProcessBatchResult["results"] = [];
+  for (const item of normalized) {
+    const result = await runShell(root, item);
+    results.push({ command: item.command, ...result });
+  }
+  return { results };
 }
 
 export async function runGit(root: string, args: string[], timeout = 60_000) {
