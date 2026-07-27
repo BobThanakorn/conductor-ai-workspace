@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { listWorkspace, readWorkspaceFile, runShellBatch } from "./execution-plane";
+import { listWorkspace, normalizeRuntimeCommand, readWorkspaceFile, runShellBatch } from "./execution-plane";
+
+test("normalizes the container Python executable without changing its arguments", () => {
+  assert.equal(normalizeRuntimeCommand("python hello.py"), "python3 hello.py");
+  assert.equal(normalizeRuntimeCommand("python3 hello.py"), "python3 hello.py");
+  assert.equal(normalizeRuntimeCommand("python-tool hello.py"), "python-tool hello.py");
+});
 
 test("workspace listing and reads exclude secret-bearing paths", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conductor-workspace-"));

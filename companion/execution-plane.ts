@@ -37,6 +37,15 @@ export type ProcessBatchResult = {
   results: Array<ProcessResult & { command: string }>;
 };
 
+/**
+ * The container runtime installs Python as `python3`. Normalize only a leading
+ * standalone `python` executable so reviewed arguments and shell syntax remain
+ * unchanged.
+ */
+export function normalizeRuntimeCommand(command: string) {
+  return command.trim().replace(/^python(?=\s|$)/i, "python3");
+}
+
 export function resolveWorkspacePath(root: string, requested: string) {
   const relative = normalizeRepositoryRelativePath(requested);
   const resolved = path.resolve(root, relative);
@@ -127,7 +136,7 @@ export async function runShell(root: string, input: Record<string, unknown>): Pr
   if (process.env.CONDUCTOR_EXECUTION_MODE !== "container" && process.env.CONDUCTOR_ALLOW_HOST_EXECUTION !== "true") {
     throw new Error("Generic terminal execution is disabled outside the container. Use Docker Compose or set CONDUCTOR_ALLOW_HOST_EXECUTION=true explicitly.");
   }
-  const command = typeof input.command === "string" ? input.command.trim() : "";
+  const command = typeof input.command === "string" ? normalizeRuntimeCommand(input.command) : "";
   if (!command || command.length > 4_000 || command.includes("\0")) throw new Error("command is invalid.");
   const cwdInput = typeof input.cwd === "string" && input.cwd !== "." ? input.cwd : undefined;
   const cwd = cwdInput ? resolveWorkspacePath(root, cwdInput).resolved : root;
@@ -170,7 +179,7 @@ export async function runShellBatch(root: string, input: Record<string, unknown>
   const normalized = commands.map((item) => {
     if (!item || typeof item !== "object") throw new Error("Each command must be an object.");
     const value = item as Record<string, unknown>;
-    const command = typeof value.command === "string" ? value.command.trim() : "";
+    const command = typeof value.command === "string" ? normalizeRuntimeCommand(value.command) : "";
     if (!command || command.length > 4_000 || command.includes("\0")) {
       throw new Error("Each command must be a non-empty bounded command.");
     }
