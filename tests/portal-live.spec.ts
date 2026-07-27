@@ -87,8 +87,15 @@ test("prose-only Agent output is recovered and executes the exact reviewed comma
   page.once("dialog", (dialog) => dialog.accept());
   await approve.click();
 
-  const terminal = page.locator(".terminal-output");
-  await expect(terminal).toContainText("15.0", { timeout: 30_000 });
-  await expect(terminal).toContainText("Error: Cannot divide by zero");
-  await expect(terminal).toContainText("exit 1");
+  const executionResult = page.getByLabel("Execution result");
+  await expect(executionResult).toBeVisible({ timeout: 30_000 });
+  await expect(executionResult).toContainText("15.0");
+  await expect(executionResult).toContainText("Error: Cannot divide by zero");
+  await expect(executionResult).toContainText("exit 1");
+
+  const executionBox = await executionResult.boundingBox();
+  const composerBox = await composer.boundingBox();
+  expect(executionBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(executionBox!.y + executionBox!.height).toBeLessThanOrEqual(composerBox!.y + 1);
 });

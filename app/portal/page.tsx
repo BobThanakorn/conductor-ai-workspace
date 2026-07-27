@@ -34,6 +34,14 @@ type ExecutionStep = {
   args?: string[];
   timeoutMs?: number;
 };
+type ExecutionResult = {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  timedOut: boolean;
+  durationMs: number;
+};
 type AgentProposal = {
   summary: string;
   plan?: string[];
@@ -164,6 +172,7 @@ export default function PortalPage() {
   const [selectedModel, setSelectedModel] = useState("");
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
   const [terminalOutput, setTerminalOutput] = useState("");
+  const [executionResults, setExecutionResults] = useState<ExecutionResult[]>([]);
   const [commitMessage, setCommitMessage] = useState("");
   const [repositoryName, setRepositoryName] = useState("");
   const [repositoryPrivate, setRepositoryPrivate] = useState(true);
@@ -315,6 +324,7 @@ export default function PortalPage() {
     setBusy(true);
     setError("");
     setProposal(null);
+    setExecutionResults([]);
     setMessages((current) => [...current, {
       id: key,
       role: "user",
@@ -399,7 +409,7 @@ export default function PortalPage() {
     )) return;
     setBusy(true);
     setError("");
-    setTerminalOutput("");
+    setExecutionResults([]);
     try {
       if (proposal.artifacts?.length) {
         await approvedCompanionAction(
@@ -417,20 +427,12 @@ export default function PortalPage() {
           cwd: ".",
           timeoutMs: execution.timeoutMs ?? 120_000,
         }));
-        const result = await approvedCompanionAction<{
-          results: Array<{ command: string; stdout: string; stderr: string; exitCode: number; timedOut: boolean; durationMs: number }>;
-        }>(
+        const result = await approvedCompanionAction<{ results: ExecutionResult[] }>(
           "terminal.execute-batch",
           "/terminal/execute-batch",
           { commands },
         );
-        setTerminalOutput(result.results.flatMap((item) => [
-          `$ ${item.command}`,
-          item.stdout,
-          item.stderr,
-          `exit ${item.exitCode}${item.timedOut ? " (timed out)" : ""} · ${item.durationMs} ms`,
-          "",
-        ]).filter(Boolean).join("\n"));
+        setExecutionResults(result.results);
       }
       setProposal(null);
       await refresh();
@@ -587,6 +589,34 @@ export default function PortalPage() {
                       </div>
                     </article>
                   ))}
+                  {executionResults.length > 0 && (
+                    <article className="execution-result" aria-label="Execution result">
+                      <div className="execution-result-heading">
+                        <span className="execution-result-icon">›_</span>
+                        <div>
+                          <strong>Execution result</strong>
+                          <small>{executionResults.length} command{executionResults.length === 1 ? "" : "s"} completed</small>
+                        </div>
+                      </div>
+                      <div className="execution-result-steps">
+                        {executionResults.map((result, index) => (
+                          <section className={result.exitCode === 0 ? "execution-step success" : "execution-step failure"} key={`${result.command}-${index}`}>
+                            <div className="execution-step-meta">
+                              <code>$ {result.command}</code>
+                              <span>{result.exitCode === 0 ? "Passed" : "Failed"} · exit {result.exitCode} · {result.durationMs} ms</span>
+                            </div>
+                            {(result.stdout || result.stderr) && (
+                              <pre className="terminal-output">
+                                {result.stdout}
+                                {result.stderr && <span className="stderr-output">{result.stderr}</span>}
+                              </pre>
+                            )}
+                            {!result.stdout && !result.stderr && <p className="execution-empty">Command completed without output.</p>}
+                          </section>
+                        ))}
+                      </div>
+                    </article>
+                  )}
                   {busy && <div className="typing"><span /><span /><span /> Processing…</div>}
                 </div>
 
@@ -649,7 +679,6 @@ export default function PortalPage() {
                     <button className="send-message" type="submit" disabled={!prompt.trim() || busy || !selectedModel}>↑</button>
                   </div>
                 </form>
-                {terminalOutput && <pre className="terminal-output">{terminalOutput}</pre>}
               </>
             )}
 
