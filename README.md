@@ -48,6 +48,9 @@ docker compose -f compose.yaml -f compose.model.yaml up --build
 # Add Docker MCP Gateway and GitHub Official MCP tools
 docker compose -f compose.yaml -f compose.azure.yaml -f compose.mcp.yaml up --build
 
+# Build the isolated external-framework comparison suite
+docker compose -f compose.yaml -f compose.harnesses.yaml up --build
+
 # Add GitHub push and pull-request credentials to the companion
 docker compose -f compose.yaml -f compose.azure.yaml -f compose.github.yaml up --build
 ```
@@ -107,6 +110,11 @@ The MCP gateway is optional. Both agent engines filter its tool catalog to
 read/list/search/fetch/query operations. Repository writes, shell commands,
 remote Git publication, and pull requests stay behind Conductor's one-time
 approval flow.
+
+The workspace root `skills.md` is automatically included in the bounded
+repository snapshot when the portal is connected. It supplies engineering,
+verification, safety, and MCP guidance to both engines; it is context only and
+cannot grant execution permission.
 
 To expose both Azure and a local vLLM model in the model picker, configure both
 providers. The selected Qwen model is routed to vLLM while Azure remains the

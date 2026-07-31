@@ -17,6 +17,12 @@ export type AgentEnvironmentBindings = {
   MCP_GATEWAY_URL?: string;
   LANGGRAPH_AGENT_URL?: string;
   LANGGRAPH_INTERNAL_TOKEN?: string;
+  PYDANTIC_AI_AGENT_URL?: string;
+  CREWAI_AGENT_URL?: string;
+  MICROSOFT_AGENT_FRAMEWORK_URL?: string;
+  LLAMAINDEX_AGENT_URL?: string;
+  HAYSTACK_AGENT_URL?: string;
+  SEMANTIC_KERNEL_AGENT_URL?: string;
 };
 
 export type AgentRuntimeConfig =

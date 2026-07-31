@@ -535,7 +535,6 @@ export default function WorkspaceClient() {
   const [environmentPickerOpen, setEnvironmentPickerOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [modelStatus, setModelStatus] = useState<Record<string, "ready" | "configured" | "unavailable"> >({});
   const [newAgentTitle, setNewAgentTitle] = useState("");
   const [newAgentGoal, setNewAgentGoal] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -787,10 +786,14 @@ export default function WorkspaceClient() {
       })
       .then((data) => {
         if (!data) return;
-        const options = Array.isArray(data.models) ? data.models.filter((model): model is string => typeof model === "string" && Boolean(model.trim())) : [];
+        const options = Array.isArray(data.models)
+          ? data.models.filter((model): model is string =>
+            typeof model === "string"
+            && Boolean(model.trim())
+            && data.modelStatus?.[model] === "ready")
+          : [];
         if (options.length) {
           setModelOptions(options);
-          setModelStatus(data.modelStatus ?? {});
           if (!agentModelOverride.current && data.model) {
             setWorkspace((current) => ({ ...current, model: data.model as string }));
           }
@@ -2241,7 +2244,7 @@ export default function WorkspaceClient() {
                   <button
                     type="button"
                     className="model-button"
-                    title="Choose a configured model"
+                    title="Choose a ready model"
                     aria-haspopup="listbox"
                     aria-expanded={modelPickerOpen}
                     onClick={() => setModelPickerOpen((open) => !open)}
@@ -2251,21 +2254,17 @@ export default function WorkspaceClient() {
                     <span className="model-caret" aria-hidden="true">⌄</span>
                   </button>
                   {modelPickerOpen && (
-                    <div className="model-menu" role="listbox" aria-label="Configured models">
+                    <div className="model-menu" role="listbox" aria-label="Ready models">
                       {(modelOptions.length ? modelOptions : [workspace.model]).map((model) => {
-                        const status = modelStatus[model] ?? "configured";
-                        const selectable = status === "ready";
                         return (
                         <button
                           type="button"
                           role="option"
                           aria-selected={workspace.model === model}
-                          className={`${workspace.model === model ? "selected" : ""} ${!selectable ? "unavailable" : ""}`}
+                          className={workspace.model === model ? "selected" : ""}
                           key={model}
-                          disabled={!selectable}
-                          title={selectable ? `${model} is ready` : `${model} is ${status}; it is not available from the provider`}
+                          title={`${model} is ready`}
                           onClick={() => {
-                            if (!selectable) return;
                             agentModelOverride.current = model;
                             setWorkspace((current) => ({ ...current, model }));
                             setModelPickerOpen(false);
@@ -2274,12 +2273,12 @@ export default function WorkspaceClient() {
                         >
                           <span className="model-status-dot" aria-hidden="true" />
                           <span className="model-option-name">{model}</span>
-                          <small className={`model-option-status ${status}`}>{status}</small>
+                          <small className="model-option-status ready">ready</small>
                           {workspace.model === model && <b>✓</b>}
                         </button>
                         );
                       })}
-                      {!modelOptions.length && <small>Only the server-configured model is available.</small>}
+                      {!modelOptions.length && <small>No ready model is available.</small>}
                     </div>
                   )}
                 </div>

@@ -9,16 +9,37 @@ const DEFAULT_WORKSPACE_ID = "workspace_local";
 
 type ModelStatus = "ready" | "configured" | "unavailable";
 type AgentEngine = {
-  id: "openai-agents" | "langgraph";
+  id: "openai-agents" | "langgraph" | "pydantic-ai" | "crewai"
+    | "microsoft-agent-framework" | "llamaindex" | "haystack" | "semantic-kernel";
   name: string;
   status: ModelStatus;
 };
+
+const ENGINE_LABELS: Record<AgentEngine["id"], string> = {
+  "openai-agents": "OpenAI Agents SDK",
+  langgraph: "LangChain + LangGraph",
+  "pydantic-ai": "PydanticAI",
+  crewai: "CrewAI",
+  "microsoft-agent-framework": "Microsoft Agent Framework",
+  llamaindex: "LlamaIndex",
+  haystack: "Haystack",
+  "semantic-kernel": "Semantic Kernel",
+};
+
+function engineLabel(engine?: string): string | undefined {
+  return engine && engine in ENGINE_LABELS
+    ? ENGINE_LABELS[engine as AgentEngine["id"]]
+    : engine;
+}
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
   plan?: string[];
   telemetry?: AgentTelemetry;
+  framework?: string;
+  model?: string;
 };
 type AgentTelemetry = {
   durationMs: number;
@@ -233,7 +254,6 @@ export default function PortalPage() {
   const [fileFilter, setFileFilter] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
   const [models, setModels] = useState<string[]>([]);
-  const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>({});
   const [selectedModel, setSelectedModel] = useState("");
   const [engines, setEngines] = useState<AgentEngine[]>([
     { id: "openai-agents", name: "OpenAI Agents SDK", status: "ready" },
@@ -340,6 +360,8 @@ export default function PortalPage() {
               text: run.answer || run.summary || "Agent run completed.",
               plan: run.plan,
               telemetry: run.telemetry,
+              framework: engineLabel(run.engine),
+              model: run.model,
             },
           ];
         }));
@@ -349,12 +371,14 @@ export default function PortalPage() {
       setRepositories(nextRepositories);
     }
     if (modelResult.status === "fulfilled") {
-      const options = Array.from(new Set([
+      const discovered = Array.from(new Set([
         modelResult.value.model,
         ...(modelResult.value.models ?? []),
       ].filter((value): value is string => Boolean(value))));
+      const options = discovered.filter(
+        (model) => modelResult.value.modelStatus?.[model] === "ready",
+      );
       setModels(options);
-      setModelStatus(modelResult.value.modelStatus ?? {});
       const nextEngines = modelResult.value.engines?.length
         ? modelResult.value.engines
         : [{ id: "openai-agents" as const, name: "OpenAI Agents SDK", status: "ready" as const }];
@@ -364,9 +388,7 @@ export default function PortalPage() {
           ? current
           : nextEngines.find((engine) => engine.status === "ready")?.id ?? "openai-agents",
       );
-      const firstReady = options.find((model) =>
-        (modelResult.value.modelStatus?.[model] ?? "configured") === "ready",
-      ) ?? "";
+      const firstReady = options[0] ?? "";
       setSelectedModel((current) =>
         current && options.includes(current) ? current : firstReady,
       );
@@ -561,6 +583,7 @@ export default function PortalPage() {
     const textExtension = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|kts|cs|cpp|c|h|hpp|rb|php|swift|sql|md|json|ya?ml|toml|ini|css|scss|html|sh|ps1)$/i;
     const normalizedMessage = message.toLowerCase();
     const preferredPaths = new Map([
+      ["skills.md", 110],
       ["readme.md", 90],
       ["package.json", 80],
       ["compose.yaml", 75],
@@ -690,6 +713,8 @@ export default function PortalPage() {
         text: `${proposalOutput.summary}${data.engine === "langgraph" && data.orchestration?.checkpointId ? `\n\nLangGraph checkpoint: ${data.orchestration.checkpointId.slice(0, 12)}` : ""}`,
         plan: proposalOutput.plan,
         telemetry: data.telemetry,
+        framework: engineLabel(data.engine ?? selectedEngine),
+        model: data.model ?? selectedModel,
       }]);
       if (agentMode === "agent" && (
         proposalOutput.artifacts?.length ||
@@ -1043,7 +1068,15 @@ export default function PortalPage() {
                         {message.role === "user" ? "U" : message.role === "system" ? "!" : "AI"}
                       </span>
                       <div>
-                        <div className="message-meta">{message.role}</div>
+                        <div className="message-meta">
+                          <span>{message.role}</span>
+                          {message.role === "assistant" && message.framework && (
+                            <span className="answer-runtime">
+                              {message.framework}
+                              {message.model ? ` · ${message.model}` : ""}
+                            </span>
+                          )}
+                        </div>
                         <p>{message.text}</p>
                         {message.plan?.length ? <ol>{message.plan.map((step) => <li key={step}>{step}</li>)}</ol> : null}
                         {message.telemetry && (
@@ -1146,10 +1179,7 @@ export default function PortalPage() {
                     </select>
                     <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model">
                       {!models.length && <option value="">No ready model</option>}
-                      {models.map((model) => {
-                        const status = modelStatus[model] ?? "configured";
-                        return <option key={model} value={model} disabled={status !== "ready"}>{model} · {status}</option>;
-                      })}
+                      {models.map((model) => <option key={model} value={model}>{model} · ready</option>)}
                     </select>
                     <button className="send-message" type="submit" disabled={!prompt.trim() || busy || !selectedModel}>↑</button>
                   </div>

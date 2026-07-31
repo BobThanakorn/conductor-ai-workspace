@@ -109,7 +109,16 @@ export const agentRequestSchema = z
   .object({
     message: z.string().trim().min(1).max(6_000),
     mode: z.enum(["agent", "ask"]).default("agent"),
-    engine: z.enum(["openai-agents", "langgraph"]).default("openai-agents"),
+    engine: z.enum([
+      "openai-agents",
+      "langgraph",
+      "pydantic-ai",
+      "crewai",
+      "microsoft-agent-framework",
+      "llamaindex",
+      "haystack",
+      "semantic-kernel",
+    ]).default("openai-agents"),
     model: z.string().trim().min(1).max(200).optional(),
     taskId: identifierSchema.optional(),
     workspaceId: identifierSchema.optional(),
