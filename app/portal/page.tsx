@@ -253,6 +253,7 @@ export default function PortalPage() {
     "Explain in three concise bullet points what this repository does. Do not modify files or run commands.",
   );
   const [benchmarkResults, setBenchmarkResults] = useState<BenchmarkResult[]>([]);
+  const [benchmarkContextPaths, setBenchmarkContextPaths] = useState<string[]>([]);
 
   const activeTask = workspace.activeTask ?? workspace.tasks?.[0] ?? null;
   const companionUrl = selectedEngine === "langgraph"
@@ -556,6 +557,70 @@ export default function PortalPage() {
     if (path?.trim()) await openFile(path.trim(), true);
   }
 
+  async function collectRepositoryContext(message: string) {
+    const textExtension = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|kts|cs|cpp|c|h|hpp|rb|php|swift|sql|md|json|ya?ml|toml|ini|css|scss|html|sh|ps1)$/i;
+    const normalizedMessage = message.toLowerCase();
+    const preferredPaths = new Map([
+      ["readme.md", 90],
+      ["package.json", 80],
+      ["compose.yaml", 75],
+      ["docker-compose.yml", 75],
+      ["app/api/agent/route.ts", 70],
+      ["lib/agent-provider.ts", 65],
+      ["lib/environment-store.ts", 60],
+      ["langgraph-agent/graph.py", 60],
+    ]);
+    const manuallyAttached = contextFiles.slice(-8);
+    const manualPaths = new Set(manuallyAttached.map((file) => file.path));
+    const candidates = allFiles
+      .filter((file) => textExtension.test(file.path) && !manualPaths.has(file.path))
+      .map((file) => {
+        const path = file.path.toLowerCase();
+        const basename = path.split("/").at(-1) ?? path;
+        const preferredScore = preferredPaths.get(path) ?? preferredPaths.get(basename) ?? 0;
+        const mentionedScore =
+          (normalizedMessage.includes(path) ? 200 : 0) +
+          (basename.length > 3 && normalizedMessage.includes(basename) ? 120 : 0);
+        const keywordScore = normalizedMessage
+          .split(/[^\p{L}\p{N}_.-]+/u)
+          .filter((word) => word.length >= 4 && path.includes(word))
+          .length * 15;
+        return { path: file.path, score: mentionedScore + keywordScore + preferredScore };
+      })
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .slice(0, Math.max(0, 8 - manuallyAttached.length));
+    const snapshots = await Promise.all(candidates.map(async ({ path }) => {
+      try {
+        const response = await fetch(`${companionUrl}/fs/read`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        if (!response.ok) return null;
+        const data = await response.json() as { content?: string };
+        if (typeof data.content !== "string" || !data.content.trim()) return null;
+        return { path, content: data.content.slice(0, 16_000) };
+      } catch {
+        return null;
+      }
+    }));
+    let totalBytes = manuallyAttached.reduce(
+      (total, file) => total + new TextEncoder().encode(file.content).byteLength,
+      0,
+    );
+    return [
+      ...manuallyAttached,
+      ...snapshots.filter((snapshot): snapshot is { path: string; content: string } => {
+        if (!snapshot) return false;
+        const bytes = new TextEncoder().encode(snapshot.content).byteLength;
+        if (totalBytes + bytes > 48_000) return false;
+        totalBytes += bytes;
+        return true;
+      }),
+    ].slice(0, 8);
+  }
+
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = prompt.trim();
@@ -572,6 +637,7 @@ export default function PortalPage() {
       text: message,
     }]);
     try {
+      const workspaceContextFiles = await collectRepositoryContext(message);
       const data = await readJson<{
         output?: AgentProposal;
         model?: string;
@@ -593,7 +659,7 @@ export default function PortalPage() {
             taskId: activeTask?.id,
             workspaceId: selectedWorkspaceId,
             idempotencyKey: key,
-            workspaceFiles: contextFiles,
+            workspaceFiles: workspaceContextFiles,
             workspace: {
               repository: health?.root ?? "Local workspace",
               branch: health?.branch,
@@ -653,8 +719,11 @@ export default function PortalPage() {
     setBusy(true);
     setError("");
     setBenchmarkResults([]);
+    setBenchmarkContextPaths([]);
     const results: BenchmarkResult[] = [];
     try {
+      const workspaceContextFiles = await collectRepositoryContext(question);
+      setBenchmarkContextPaths(workspaceContextFiles.map((file) => file.path));
       for (const engine of readyEngines) {
         const key = uniqueKey(`benchmark-${engine.id}`);
         try {
@@ -677,7 +746,7 @@ export default function PortalPage() {
                 workspaceId: selectedWorkspaceId,
                 taskId: activeTask?.id,
                 idempotencyKey: key,
-                workspaceFiles: contextFiles,
+                workspaceFiles: workspaceContextFiles,
                 workspace: {
                   repository: health?.root ?? "Local workspace",
                   branch: health?.branch,
@@ -1150,9 +1219,15 @@ export default function PortalPage() {
                 </label>
                 <div className="benchmark-config">
                   <span>Model: <strong>{selectedModel || "not ready"}</strong></span>
-                  <span>Context files: <strong>{contextFiles.length}</strong></span>
+                  <span>Context files: <strong>{benchmarkContextPaths.length || contextFiles.length}</strong></span>
                   <span>Engines: <strong>{engines.filter((engine) => engine.status === "ready").length}</strong></span>
                 </div>
+                {benchmarkContextPaths.length > 0 && (
+                  <details className="benchmark-context">
+                    <summary>Repository snapshot used by both engines ({benchmarkContextPaths.length} files)</summary>
+                    <ul>{benchmarkContextPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul>
+                  </details>
+                )}
                 {!benchmarkResults.length && (
                   <p className="empty-copy">Run a comparison to capture answers, token usage, response time, tool activity, and the audit trail.</p>
                 )}

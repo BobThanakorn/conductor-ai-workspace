@@ -104,8 +104,14 @@ test("prose-only Agent output is recovered and executes the exact reviewed comma
 });
 
 test("benchmark displays answer, tokens, latency, tools, and audit log for both engines", async ({ page }) => {
+  const benchmarkContexts: Array<Array<{ path: string; content: string }>> = [];
   await page.route("**/api/agent", async (route) => {
-    const request = route.request().postDataJSON() as { engine: string; message: string };
+    const request = route.request().postDataJSON() as {
+      engine: string;
+      message: string;
+      workspaceFiles?: Array<{ path: string; content: string }>;
+    };
+    benchmarkContexts.push(request.workspaceFiles ?? []);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -142,6 +148,7 @@ test("benchmark displays answer, tokens, latency, tools, and audit log for both 
   await page.getByRole("button", { name: "Run comparison" }).click();
 
   await expect(page.locator(".benchmark-card")).toHaveCount(2);
+  await expect(page.getByText(/Repository snapshot used by both engines/)).toBeVisible();
   await expect(page.getByText("openai-agents benchmark answer")).toBeVisible();
   await expect(page.getByText("langgraph benchmark answer")).toBeVisible();
   await expect(page.getByText("50", { exact: true })).toHaveCount(2);
@@ -149,4 +156,9 @@ test("benchmark displays answer, tokens, latency, tools, and audit log for both 
   await expect(page.locator(".benchmark-card").first()).toContainText("read_repository");
   await page.locator(".benchmark-card").first().getByText(/Audit log/).click();
   await expect(page.locator(".benchmark-card").first()).toContainText("agent.model.completed");
+  expect(benchmarkContexts).toHaveLength(2);
+  expect(benchmarkContexts[0].length).toBeGreaterThan(0);
+  expect(benchmarkContexts[1].map((file) => file.path)).toEqual(
+    benchmarkContexts[0].map((file) => file.path),
+  );
 });

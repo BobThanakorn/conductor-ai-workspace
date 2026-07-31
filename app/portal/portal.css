@@ -444,6 +444,17 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 }
 .benchmark-config { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0 20px; }
 .benchmark-config span { padding: 6px 9px; border-radius: 6px; color: #737a72; background: #f0f2ed; font-size: 10px; }
+.benchmark-context {
+  margin: -8px 0 18px;
+  padding: 9px 11px;
+  border: 1px solid #dfe2dc;
+  border-radius: 8px;
+  background: #f8faf7;
+}
+.benchmark-context summary { cursor: pointer; color: #5f685f; font-size: 10px; font-weight: 700; }
+.benchmark-context ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; padding-left: 18px; }
+.benchmark-context li { min-width: 0; color: #7c837a; font-size: 9px; }
+.benchmark-context code { overflow-wrap: anywhere; }
 .benchmark-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .benchmark-card { overflow: hidden; border: 1px solid #d9ddd6; border-radius: 12px; background: #fffefb; }
 .benchmark-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-bottom: 1px solid #e3e6e1; background: #f8faf7; }
@@ -635,6 +646,9 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
 .benchmark-heading button { border-color: #4c8d5e; background: #2f7445; }
 .benchmark-question textarea { border-color: #444; color: #ddd; background: #252526; }
 .benchmark-config span { color: #b7bcb5; background: #292d29; }
+.benchmark-context { border-color: #3b3b3b; background: #232323; }
+.benchmark-context summary { color: #b8beb7; }
+.benchmark-context li { color: #a4aaa3; }
 .benchmark-card { border-color: #3b3b3b; background: #252526; }
 .benchmark-card > header { border-color: #3b3b3b; background: #2a2a2b; }
 .benchmark-metrics, .benchmark-metrics div:nth-child(odd), .benchmark-card details { border-color: #3b3b3b; }
@@ -677,6 +691,7 @@ button:disabled { cursor: not-allowed !important; opacity: .52; }
   .composer-toolbar select { max-width: 160px; }
   .runtime-grid { grid-template-columns: 1fr; }
   .benchmark-grid { grid-template-columns: 1fr; }
+  .benchmark-context ul { grid-template-columns: 1fr; }
   .benchmark-heading { flex-direction: column; }
   .audit-history > details > summary { grid-template-columns: 1fr; }
   .git-actions, .repository-form { align-items: stretch; flex-direction: column; }

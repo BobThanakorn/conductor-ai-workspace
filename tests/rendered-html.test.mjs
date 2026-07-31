@@ -23,6 +23,8 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(portal, /Message the Conductor Agent/);
   assert.match(portal, /Select agent engine/);
   assert.match(portal, /Agent engine benchmark/);
+  assert.match(portal, /collectRepositoryContext/);
+  assert.match(portal, /Repository snapshot used by both engines/);
   assert.match(portal, /Recent audited runs/);
   assert.match(portal, /Reported tokens/);
   assert.match(portal, /Tools used/);
