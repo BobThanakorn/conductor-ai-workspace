@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 
 import { ApiError, type WorkspaceAction } from "@/lib/api-contract";
 import type { AgentEnvironmentBindings } from "@/lib/agent-provider";
+import type { AgentTelemetry } from "@/lib/agent-telemetry";
 
 export const DEFAULT_WORKSPACE_ID = "workspace_local";
 
@@ -197,6 +198,18 @@ const schemaStatements = [
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(workspace_id, idempotency_key)
   )`,
+  `CREATE TABLE IF NOT EXISTS agent_run_audit (
+    run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    engine TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    token_usage_json TEXT NOT NULL DEFAULT '{}',
+    tools_json TEXT NOT NULL DEFAULT '[]',
+    audit_log_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
   `CREATE TABLE IF NOT EXISTS idempotency_keys (
     scope TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -215,12 +228,19 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS task_events_workspace_sequence_idx ON task_events(workspace_id, sequence)",
   "CREATE INDEX IF NOT EXISTS task_events_task_sequence_idx ON task_events(task_id, sequence)",
   "CREATE INDEX IF NOT EXISTS agent_runs_task_idx ON agent_runs(task_id)",
+  "CREATE INDEX IF NOT EXISTS agent_run_audit_workspace_idx ON agent_run_audit(workspace_id, created_at)",
   `CREATE TRIGGER IF NOT EXISTS task_events_no_update
     BEFORE UPDATE ON task_events
     BEGIN SELECT RAISE(ABORT, 'task_events are append-only'); END`,
   `CREATE TRIGGER IF NOT EXISTS task_events_no_delete
     BEFORE DELETE ON task_events
     BEGIN SELECT RAISE(ABORT, 'task_events are append-only'); END`,
+  `CREATE TRIGGER IF NOT EXISTS agent_run_audit_no_update
+    BEFORE UPDATE ON agent_run_audit
+    BEGIN SELECT RAISE(ABORT, 'agent_run_audit is append-only'); END`,
+  `CREATE TRIGGER IF NOT EXISTS agent_run_audit_no_delete
+    BEFORE DELETE ON agent_run_audit
+    BEGIN SELECT RAISE(ABORT, 'agent_run_audit is append-only'); END`,
 ];
 
 export function getEnvironmentBindings(): EnvironmentBindings {
@@ -528,18 +548,25 @@ export async function loadWorkspaceState(
       database
         .prepare(
           selectedTaskId
-            ? `SELECT id, task_id, mode, model, output_json, created_at
-               FROM agent_runs WHERE workspace_id = ? AND task_id = ? ORDER BY created_at DESC LIMIT 10`
-            : `SELECT id, task_id, mode, model, output_json, created_at
-               FROM agent_runs
-               WHERE workspace_id = ?
-                 AND task_id = (
+            ? `SELECT ar.id, ar.task_id, ar.mode, ar.model, ar.output_json, ar.created_at,
+                      aa.question, aa.answer, aa.engine, aa.duration_ms,
+                      aa.token_usage_json, aa.tools_json, aa.audit_log_json
+               FROM agent_runs ar
+               LEFT JOIN agent_run_audit aa ON aa.run_id = ar.id
+               WHERE ar.workspace_id = ? AND ar.task_id = ? ORDER BY ar.created_at DESC LIMIT 10`
+            : `SELECT ar.id, ar.task_id, ar.mode, ar.model, ar.output_json, ar.created_at,
+                      aa.question, aa.answer, aa.engine, aa.duration_ms,
+                      aa.token_usage_json, aa.tools_json, aa.audit_log_json
+               FROM agent_runs ar
+               LEFT JOIN agent_run_audit aa ON aa.run_id = ar.id
+               WHERE ar.workspace_id = ?
+                 AND ar.task_id = (
                    SELECT id FROM tasks
                    WHERE workspace_id = ?
                    ORDER BY updated_at DESC, id DESC
                    LIMIT 1
                  )
-               ORDER BY created_at DESC LIMIT 10`,
+               ORDER BY ar.created_at DESC LIMIT 10`,
         )
         .bind(...(selectedTaskId ? [workspaceId, selectedTaskId] : [workspaceId, workspaceId])),
     ]);
@@ -610,6 +637,24 @@ export async function loadWorkspaceState(
         plan: Array.isArray(output.plan)
           ? output.plan.filter((step): step is string => typeof step === "string").slice(0, 12)
           : [],
+        question: typeof value.question === "string" ? value.question : "",
+        answer: typeof value.answer === "string" ? value.answer : "",
+        engine: typeof value.engine === "string" ? value.engine : "",
+        telemetry: {
+          durationMs: typeof value.duration_ms === "number" ? value.duration_ms : 0,
+          tokenUsage: parseJson(
+            typeof value.token_usage_json === "string" ? value.token_usage_json : null,
+            { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          ),
+          tools: parseJson(
+            typeof value.tools_json === "string" ? value.tools_json : null,
+            [],
+          ),
+          auditLog: parseJson(
+            typeof value.audit_log_json === "string" ? value.audit_log_json : null,
+            [],
+          ),
+        },
       };
     }),
     meta: {
@@ -1104,6 +1149,9 @@ export async function persistAgentRun(
     model: string;
     promptHash: string;
     output: Record<string, unknown>;
+    question: string;
+    engine: string;
+    telemetry: AgentTelemetry;
   },
 ): Promise<Record<string, unknown>> {
   const suffix = (await digest(`${options.scope}:${options.key}`)).slice(0, 16);
@@ -1122,6 +1170,8 @@ export async function persistAgentRun(
     mode: options.mode,
     model: options.model,
     output: options.output,
+    engine: options.engine,
+    telemetry: options.telemetry,
     createdAt,
   };
 
@@ -1153,6 +1203,25 @@ export async function persistAgentRun(
         options.model,
         options.promptHash,
         JSON.stringify(options.output),
+        createdAt,
+      ),
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO agent_run_audit
+          (run_id, workspace_id, question, answer, engine, duration_ms,
+           token_usage_json, tools_json, audit_log_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        runId,
+        options.workspaceId,
+        options.question,
+        summary,
+        options.engine,
+        options.telemetry.durationMs,
+        JSON.stringify(options.telemetry.tokenUsage),
+        JSON.stringify(options.telemetry.tools),
+        JSON.stringify(options.telemetry.auditLog),
         createdAt,
       ),
     database

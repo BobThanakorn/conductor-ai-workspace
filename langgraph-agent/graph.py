@@ -26,6 +26,7 @@ class ConductorState(TypedDict, total=False):
     proposal: dict[str, Any]
     snapshot_hash: str
     retry_count: int
+    telemetry: dict[str, Any]
 
 
 READ_ONLY_PREFIXES = ("get", "list", "read", "search", "fetch", "inspect", "view", "query")
@@ -212,7 +213,11 @@ async def model_node(state: ConductorState) -> dict[str, Any]:
             response_format=AgentProposal,
         )
         if tools
-        else model.with_structured_output(AgentProposal, method="json_schema")
+        else model.with_structured_output(
+            AgentProposal,
+            method="json_schema",
+            include_raw=True,
+        )
     )
     last_error: Exception | None = None
     for attempt in range(2):
@@ -232,13 +237,37 @@ async def model_node(state: ConductorState) -> dict[str, Any]:
             if tools:
                 response = await structured.ainvoke({"messages": messages[1:]})
                 proposal = response["structured_response"]
+                response_messages = response.get("messages", [])
             else:
-                proposal = await structured.ainvoke(messages)
+                response = await structured.ainvoke(messages)
+                proposal = response["parsed"]
+                response_messages = [response["raw"]]
             if not isinstance(proposal, AgentProposal):
                 proposal = AgentProposal.model_validate(proposal)
+            token_usage = {
+                "requests": 0,
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "totalTokens": 0,
+            }
+            tool_uses: list[dict[str, str]] = []
+            for item in response_messages:
+                usage = getattr(item, "usage_metadata", None) or {}
+                if usage:
+                    token_usage["requests"] += 1
+                    token_usage["inputTokens"] += int(usage.get("input_tokens", 0) or 0)
+                    token_usage["outputTokens"] += int(usage.get("output_tokens", 0) or 0)
+                    token_usage["totalTokens"] += int(usage.get("total_tokens", 0) or 0)
+                for tool_call in getattr(item, "tool_calls", None) or []:
+                    name = str(tool_call.get("name", "unknown_tool"))
+                    tool_uses.append({"name": name, "status": "called"})
             return {
                 "proposal": proposal.model_dump(mode="json"),
                 "retry_count": attempt,
+                "telemetry": {
+                    "tokenUsage": token_usage,
+                    "tools": tool_uses,
+                },
             }
         except Exception as error:
             last_error = error
@@ -329,7 +358,7 @@ def build_graph(checkpoint_path: str):
     return builder, checkpointer
 
 
-async def invoke_graph(request: AgentRequest) -> tuple[AgentProposal, str, str]:
+async def invoke_graph(request: AgentRequest) -> tuple[AgentProposal, str, str, dict[str, Any]]:
     checkpoint_path = os.environ.get("LANGGRAPH_CHECKPOINT_PATH", "/data/langgraph/checkpoints.sqlite")
     builder, checkpointer_context = build_graph(checkpoint_path)
     thread_id = f"{request.workspaceId}:{request.taskId or request.runId}:langgraph"
@@ -343,4 +372,6 @@ async def invoke_graph(request: AgentRequest) -> tuple[AgentProposal, str, str]:
             config={"configurable": {"thread_id": thread_id}}
         )
         checkpoint = state_snapshot.config["configurable"].get("checkpoint_id", "")
-    return AgentProposal.model_validate(result["proposal"]), thread_id, str(checkpoint)
+    telemetry = result.get("telemetry", {})
+    telemetry["retryCount"] = int(result.get("retry_count", 0) or 0)
+    return AgentProposal.model_validate(result["proposal"]), thread_id, str(checkpoint), telemetry

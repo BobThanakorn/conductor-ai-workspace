@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Header, HTTPException
 
@@ -55,8 +56,9 @@ async def run_agent(
 ) -> dict[str, object]:
     _authorize(authorization)
     started = time.perf_counter()
+    started_at = datetime.now(UTC).isoformat()
     try:
-        proposal, thread_id, checkpoint_id = await invoke_graph(request)
+        proposal, thread_id, checkpoint_id, telemetry = await invoke_graph(request)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except RuntimeError as error:
@@ -71,5 +73,25 @@ async def run_agent(
         "output": _serialize_proposal(proposal),
         "metrics": {
             "durationMs": round((time.perf_counter() - started) * 1_000),
+            "retryCount": telemetry.get("retryCount", 0),
+            "tokenUsage": telemetry.get("tokenUsage", {
+                "requests": 0,
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "totalTokens": 0,
+            }),
+            "tools": telemetry.get("tools", []),
+            "auditLog": [
+                {
+                    "at": started_at,
+                    "stage": "langgraph.request.received",
+                    "detail": "Validated request and prepared checkpointed graph run.",
+                },
+                {
+                    "at": datetime.now(UTC).isoformat(),
+                    "stage": "langgraph.graph.completed",
+                    "detail": f"Completed graph with retryCount={telemetry.get('retryCount', 0)}.",
+                },
+            ],
         },
     }

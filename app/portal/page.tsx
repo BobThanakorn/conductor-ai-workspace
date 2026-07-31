@@ -18,6 +18,41 @@ type ChatMessage = {
   role: "user" | "assistant" | "system";
   text: string;
   plan?: string[];
+  telemetry?: AgentTelemetry;
+};
+type AgentTelemetry = {
+  durationMs: number;
+  providerDurationMs?: number;
+  tokenUsage: {
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+  tools: Array<{ name: string; status: string }>;
+  auditLog: Array<{ at: string; stage: string; detail: string }>;
+};
+type BenchmarkResult = {
+  engine: AgentEngine["id"];
+  engineName: string;
+  model: string;
+  question: string;
+  answer: string;
+  ok: boolean;
+  telemetry: AgentTelemetry;
+  error?: string;
+};
+type AgentRunRecord = {
+  id?: string;
+  taskId?: string | null;
+  summary?: string;
+  plan?: string[];
+  createdAt?: string;
+  question?: string;
+  answer?: string;
+  engine?: string;
+  model?: string;
+  telemetry?: AgentTelemetry;
 };
 type FileEntry = {
   path: string;
@@ -80,13 +115,7 @@ type WorkspaceState = {
   };
   activeTask?: Task | null;
   tasks?: Task[];
-  recentAgentRuns?: Array<{
-    id?: string;
-    taskId?: string | null;
-    summary?: string;
-    plan?: string[];
-    createdAt?: string;
-  }>;
+  recentAgentRuns?: AgentRunRecord[];
 };
 type RepositorySummary = {
   id: string;
@@ -187,7 +216,7 @@ async function approvedCompanionAction<T>(
 }
 
 export default function PortalPage() {
-  const [activeTab, setActiveTab] = useState<"chat" | "git" | "project">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "git" | "project" | "benchmark">("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
   const [agentMode, setAgentMode] = useState<"ask" | "agent">("agent");
@@ -220,6 +249,10 @@ export default function PortalPage() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(DEFAULT_WORKSPACE_ID);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [repositoryFilter, setRepositoryFilter] = useState("");
+  const [benchmarkPrompt, setBenchmarkPrompt] = useState(
+    "Explain in three concise bullet points what this repository does. Do not modify files or run commands.",
+  );
+  const [benchmarkResults, setBenchmarkResults] = useState<BenchmarkResult[]>([]);
 
   const activeTask = workspace.activeTask ?? workspace.tasks?.[0] ?? null;
   const companionUrl = selectedEngine === "langgraph"
@@ -292,12 +325,23 @@ export default function PortalPage() {
     if (workspaceResult.status === "fulfilled") {
       setWorkspace(workspaceResult.value);
       if (!messages.length && workspaceResult.value.recentAgentRuns?.length) {
-        setMessages(workspaceResult.value.recentAgentRuns.slice().reverse().map((run, index) => ({
-          id: run.id ?? `restored-${index}`,
-          role: "assistant",
-          text: run.summary ?? "Agent run completed.",
-          plan: run.plan,
-        })));
+        setMessages(workspaceResult.value.recentAgentRuns.slice().reverse().flatMap((run, index) => {
+          const runId = run.id ?? `restored-${index}`;
+          return [
+            ...(run.question ? [{
+              id: `${runId}-question`,
+              role: "user" as const,
+              text: run.question,
+            }] : []),
+            {
+              id: `${runId}-answer`,
+              role: "assistant" as const,
+              text: run.answer || run.summary || "Agent run completed.",
+              plan: run.plan,
+              telemetry: run.telemetry,
+            },
+          ];
+        }));
       }
     }
     if (repositoriesResult.status === "fulfilled") {
@@ -533,6 +577,7 @@ export default function PortalPage() {
         model?: string;
         engine?: string;
         orchestration?: { checkpointId?: string; status?: string };
+        telemetry?: AgentTelemetry;
       }>(
         await fetch("/api/agent", {
           method: "POST",
@@ -578,6 +623,7 @@ export default function PortalPage() {
         role: "assistant",
         text: `${proposalOutput.summary}${data.engine === "langgraph" && data.orchestration?.checkpointId ? `\n\nLangGraph checkpoint: ${data.orchestration.checkpointId.slice(0, 12)}` : ""}`,
         plan: proposalOutput.plan,
+        telemetry: data.telemetry,
       }]);
       if (agentMode === "agent" && (
         proposalOutput.artifacts?.length ||
@@ -595,6 +641,85 @@ export default function PortalPage() {
         role: "system",
         text: messageText,
       }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runBenchmark() {
+    const question = benchmarkPrompt.trim();
+    const readyEngines = engines.filter((engine) => engine.status === "ready");
+    if (!question || !selectedModel || !readyEngines.length || busy) return;
+    setBusy(true);
+    setError("");
+    setBenchmarkResults([]);
+    const results: BenchmarkResult[] = [];
+    try {
+      for (const engine of readyEngines) {
+        const key = uniqueKey(`benchmark-${engine.id}`);
+        try {
+          const data = await readJson<{
+            output?: AgentProposal;
+            model?: string;
+            telemetry?: AgentTelemetry;
+          }>(
+            await fetch("/api/agent", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Idempotency-Key": key,
+              },
+              body: JSON.stringify({
+                message: question,
+                mode: "ask",
+                engine: engine.id,
+                model: selectedModel,
+                workspaceId: selectedWorkspaceId,
+                taskId: activeTask?.id,
+                idempotencyKey: key,
+                workspaceFiles: contextFiles,
+                workspace: {
+                  repository: health?.root ?? "Local workspace",
+                  branch: health?.branch,
+                  headSha: gitHead,
+                },
+              }),
+            }),
+          );
+          results.push({
+            engine: engine.id,
+            engineName: engine.name,
+            model: data.model ?? selectedModel,
+            question,
+            answer: data.output?.summary ?? "No answer returned.",
+            ok: true,
+            telemetry: data.telemetry ?? {
+              durationMs: 0,
+              tokenUsage: { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              tools: [],
+              auditLog: [],
+            },
+          });
+        } catch (failure) {
+          results.push({
+            engine: engine.id,
+            engineName: engine.name,
+            model: selectedModel,
+            question,
+            answer: "",
+            ok: false,
+            error: failure instanceof Error ? failure.message : "Benchmark request failed.",
+            telemetry: {
+              durationMs: 0,
+              tokenUsage: { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              tools: [],
+              auditLog: [],
+            },
+          });
+        }
+        setBenchmarkResults([...results]);
+      }
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -814,6 +939,7 @@ export default function PortalPage() {
             <button type="button" className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>◌ Chat</button>
             <button type="button" className={activeTab === "git" ? "active" : ""} onClick={() => setActiveTab("git")}>⑂ Git</button>
             <button type="button" className={activeTab === "project" ? "active" : ""} onClick={() => setActiveTab("project")}>▣ Project</button>
+            <button type="button" className={activeTab === "benchmark" ? "active" : ""} onClick={() => setActiveTab("benchmark")}>◫ Benchmark</button>
           </div>
           <div className="header-status">
             <span className={workspaceRuntimeReady ? "status-ready" : "status-offline"} />
@@ -851,6 +977,13 @@ export default function PortalPage() {
                         <div className="message-meta">{message.role}</div>
                         <p>{message.text}</p>
                         {message.plan?.length ? <ol>{message.plan.map((step) => <li key={step}>{step}</li>)}</ol> : null}
+                        {message.telemetry && (
+                          <div className="message-telemetry">
+                            <span>{message.telemetry.durationMs.toLocaleString()} ms</span>
+                            <span>{message.telemetry.tokenUsage.totalTokens.toLocaleString()} tokens</span>
+                            <span>{message.telemetry.tools.length} tool events</span>
+                          </div>
+                        )}
                       </div>
                     </article>
                   ))}
@@ -997,6 +1130,120 @@ export default function PortalPage() {
                     : "GitHub is not configured. Add GITHUB_TOKEN to .env and restart Docker Compose."}
                 </p>
                 {terminalOutput && <pre className="terminal-output">{terminalOutput}</pre>}
+              </section>
+            )}
+
+            {activeTab === "benchmark" && (
+              <section className="real-panel benchmark-panel">
+                <div className="benchmark-heading">
+                  <div>
+                    <h1>Agent engine benchmark</h1>
+                    <p>Send the same read-only question, model, context, and repository snapshot to every ready engine.</p>
+                  </div>
+                  <button type="button" onClick={() => void runBenchmark()} disabled={busy || !benchmarkPrompt.trim() || !selectedModel}>
+                    {busy ? "Running…" : "Run comparison"}
+                  </button>
+                </div>
+                <label className="benchmark-question">
+                  <span>Test question</span>
+                  <textarea value={benchmarkPrompt} onChange={(event) => setBenchmarkPrompt(event.target.value)} rows={4} />
+                </label>
+                <div className="benchmark-config">
+                  <span>Model: <strong>{selectedModel || "not ready"}</strong></span>
+                  <span>Context files: <strong>{contextFiles.length}</strong></span>
+                  <span>Engines: <strong>{engines.filter((engine) => engine.status === "ready").length}</strong></span>
+                </div>
+                {!benchmarkResults.length && (
+                  <p className="empty-copy">Run a comparison to capture answers, token usage, response time, tool activity, and the audit trail.</p>
+                )}
+                <div className="benchmark-grid">
+                  {benchmarkResults.map((result) => (
+                    <article className={`benchmark-card ${result.ok ? "success" : "failure"}`} key={result.engine}>
+                      <header>
+                        <div>
+                          <strong>{result.engineName}</strong>
+                          <small>{result.model}</small>
+                        </div>
+                        <span>{result.ok ? "Completed" : "Failed"}</span>
+                      </header>
+                      <dl className="benchmark-metrics">
+                        <div><dt>Total response</dt><dd>{result.telemetry.durationMs.toLocaleString()} ms</dd></div>
+                        <div><dt>Provider response</dt><dd>{(result.telemetry.providerDurationMs ?? 0).toLocaleString()} ms</dd></div>
+                        <div><dt>Reported tokens</dt><dd>{result.telemetry.tokenUsage.totalTokens.toLocaleString()}</dd></div>
+                        <div><dt>Input / output</dt><dd>{result.telemetry.tokenUsage.inputTokens.toLocaleString()} / {result.telemetry.tokenUsage.outputTokens.toLocaleString()}</dd></div>
+                        <div><dt>Model requests</dt><dd>{result.telemetry.tokenUsage.requests}</dd></div>
+                        <div><dt>Tool events</dt><dd>{result.telemetry.tools.length}</dd></div>
+                      </dl>
+                      <section>
+                        <h2>Question</h2>
+                        <p>{result.question}</p>
+                      </section>
+                      <section>
+                        <h2>Answer</h2>
+                        <p>{result.error || result.answer}</p>
+                      </section>
+                      <details>
+                        <summary>Tools used ({result.telemetry.tools.length})</summary>
+                        {result.telemetry.tools.length ? (
+                          <ul>{result.telemetry.tools.map((tool, index) => <li key={`${tool.name}-${index}`}><code>{tool.name}</code> · {tool.status}</li>)}</ul>
+                        ) : <p>No tools used.</p>}
+                      </details>
+                      <details>
+                        <summary>Audit log ({result.telemetry.auditLog.length})</summary>
+                        <ol className="audit-log">
+                          {result.telemetry.auditLog.map((event, index) => (
+                            <li key={`${event.stage}-${index}`}>
+                              <time>{new Date(event.at).toLocaleTimeString()}</time>
+                              <div><strong>{event.stage}</strong><span>{event.detail}</span></div>
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                    </article>
+                  ))}
+                </div>
+                <section className="audit-history" aria-label="Recent audited Agent runs">
+                  <div>
+                    <h2>Recent audited runs</h2>
+                    <span>{workspace.recentAgentRuns?.length ?? 0} stored</span>
+                  </div>
+                  {(workspace.recentAgentRuns ?? []).map((run) => (
+                    <details key={run.id}>
+                      <summary>
+                        <strong>{run.engine || "legacy run"}</strong>
+                        <span>{run.model || "unknown model"}</span>
+                        <time>{run.createdAt ? new Date(run.createdAt).toLocaleString() : ""}</time>
+                      </summary>
+                      <div className="audit-history-body">
+                        <section><h3>Question</h3><p>{run.question || "Question was not captured for this legacy run."}</p></section>
+                        <section><h3>Answer</h3><p>{run.answer || run.summary || "No answer recorded."}</p></section>
+                        <dl className="benchmark-metrics">
+                          <div><dt>Total response</dt><dd>{run.telemetry?.durationMs.toLocaleString() ?? "—"} ms</dd></div>
+                          <div><dt>Reported tokens</dt><dd>{run.telemetry?.tokenUsage.totalTokens.toLocaleString() ?? "—"}</dd></div>
+                          <div><dt>Tools</dt><dd>{run.telemetry?.tools.length ?? 0}</dd></div>
+                        </dl>
+                        <details>
+                          <summary>Tools used ({run.telemetry?.tools.length ?? 0})</summary>
+                          {run.telemetry?.tools.length
+                            ? <ul>{run.telemetry.tools.map((tool, index) => <li key={`${tool.name}-${index}`}><code>{tool.name}</code> · {tool.status}</li>)}</ul>
+                            : <p>No tools used.</p>}
+                        </details>
+                        <details>
+                          <summary>Audit log ({run.telemetry?.auditLog.length ?? 0})</summary>
+                          <ol className="audit-log">
+                            {(run.telemetry?.auditLog ?? []).map((event, index) => (
+                              <li key={`${event.stage}-${index}`}>
+                                <time>{new Date(event.at).toLocaleTimeString()}</time>
+                                <div><strong>{event.stage}</strong><span>{event.detail}</span></div>
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
+                      </div>
+                    </details>
+                  ))}
+                  {!workspace.recentAgentRuns?.length && <p className="empty-copy">No audited Agent run has been stored yet.</p>}
+                </section>
               </section>
             )}
           </div>

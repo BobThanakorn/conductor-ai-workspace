@@ -22,6 +22,11 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(page, /\.\/portal\/page/);
   assert.match(portal, /Message the Conductor Agent/);
   assert.match(portal, /Select agent engine/);
+  assert.match(portal, /Agent engine benchmark/);
+  assert.match(portal, /Recent audited runs/);
+  assert.match(portal, /Reported tokens/);
+  assert.match(portal, /Tools used/);
+  assert.match(portal, /Audit log/);
   assert.match(portal, /selectedEngine === "langgraph"/);
   assert.match(agentRoute, /runLangGraphAgent/);
   assert.match(portal, /approvedCompanionAction/);

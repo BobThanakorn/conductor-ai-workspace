@@ -50,7 +50,19 @@ for (const engine of readyEngines) {
       ok: response.ok,
       status: response.status,
       durationMs: Math.round(performance.now() - started),
-      providerDurationMs: payload.orchestration?.metrics?.durationMs ?? null,
+      providerDurationMs: payload.telemetry?.providerDurationMs ??
+        payload.orchestration?.metrics?.durationMs ??
+        null,
+      question: prompt,
+      answer: payload.output?.summary ?? null,
+      tokenUsage: payload.telemetry?.tokenUsage ?? {
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+      tools: payload.telemetry?.tools ?? [],
+      auditLog: payload.telemetry?.auditLog ?? [],
       proposalPolicyNormalized: payload.proposalPolicy?.normalized ?? null,
       error: payload.error?.code ?? null,
     });
@@ -61,12 +73,16 @@ const summary = Object.fromEntries(readyEngines.map((engine) => {
   const samples = results.filter((result) => result.engine === engine);
   const passed = samples.filter((sample) => sample.ok);
   const durations = passed.map((sample) => sample.durationMs).sort((a, b) => a - b);
+  const totalTokens = passed.reduce((sum, sample) => sum + (sample.tokenUsage?.totalTokens ?? 0), 0);
+  const toolEvents = passed.reduce((sum, sample) => sum + (sample.tools?.length ?? 0), 0);
   return [engine, {
     runs: samples.length,
     successRate: samples.length ? passed.length / samples.length : 0,
     medianDurationMs: durations.length ? durations[Math.floor(durations.length / 2)] : null,
     minDurationMs: durations[0] ?? null,
     maxDurationMs: durations.at(-1) ?? null,
+    averageTotalTokens: passed.length ? Math.round(totalTokens / passed.length) : null,
+    toolEvents,
   }];
 }));
 

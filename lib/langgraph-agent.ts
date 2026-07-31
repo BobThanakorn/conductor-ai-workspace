@@ -1,6 +1,7 @@
 import type { AgentRuntimeConfig } from "@/lib/agent-provider";
 import type { AgentProposal } from "@/lib/agent-safety";
 import type { AgentContext } from "@/lib/environment-store";
+import type { AgentAuditEvent, AgentTokenUsage, AgentToolUse } from "@/lib/agent-telemetry";
 
 type LangGraphInput = {
   message: string;
@@ -26,7 +27,13 @@ type LangGraphResponse = {
   checkpointId?: string;
   status?: string;
   output?: AgentProposal;
-  metrics?: { durationMs?: number };
+  metrics?: {
+    durationMs?: number;
+    retryCount?: number;
+    tokenUsage?: AgentTokenUsage;
+    tools?: AgentToolUse[];
+    auditLog?: AgentAuditEvent[];
+  };
   detail?: string;
 };
 
@@ -36,7 +43,13 @@ export type LangGraphAgentResult = {
   threadId: string;
   checkpointId: string;
   status: string;
-  metrics: { durationMs?: number };
+  metrics: {
+    durationMs?: number;
+    retryCount?: number;
+    tokenUsage?: AgentTokenUsage;
+    tools?: AgentToolUse[];
+    auditLog?: AgentAuditEvent[];
+  };
 };
 
 export async function runLangGraphAgent(args: {

@@ -35,6 +35,11 @@ import {
   type AgentRuntimeConfig,
 } from "@/lib/agent-provider";
 import { runLangGraphAgent } from "@/lib/langgraph-agent";
+import {
+  emptyTokenUsage,
+  type AgentTelemetry,
+  type AgentToolUse,
+} from "@/lib/agent-telemetry";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +55,8 @@ async function runLiveAgent(
   >,
   workspaceIdentity: ReturnType<typeof agentRequestSchema.parse>["workspace"],
   mcpGatewayUrl?: string,
-): Promise<AgentOutput> {
+): Promise<{ output: AgentOutput; telemetry: Omit<AgentTelemetry, "durationMs" | "auditLog"> & { durationMs: number } }> {
+  const started = performance.now();
   const { Agent, MCPServerStreamableHttp, OpenAIProvider, Runner } = await import("@openai/agents");
   const provider = new OpenAIProvider({
     apiKey: runtime.apiKey,
@@ -128,7 +134,31 @@ async function runLiveAgent(
           ].join("\n");
       try {
         const result = await runner.run(agent, attemptPrompt, { maxTurns: mcpServer ? 4 : 2 });
-        return agentProposalSchema.parse(result.finalOutput);
+        const usage = result.runContext.usage;
+        const tools = result.newItems.flatMap((item): AgentToolUse[] => {
+          if (!item.type.toLowerCase().includes("tool")) return [];
+          const serialized = item.toJSON() as { rawItem?: { name?: unknown } };
+          const name = typeof serialized.rawItem?.name === "string"
+            ? serialized.rawItem.name
+            : item.type;
+          return [{
+            name,
+            status: item.type.toLowerCase().includes("output") ? "completed" : "called",
+          }];
+        });
+        return {
+          output: agentProposalSchema.parse(result.finalOutput),
+          telemetry: {
+            durationMs: Math.round(performance.now() - started),
+            tokenUsage: {
+              requests: usage.requests,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              totalTokens: usage.totalTokens,
+            },
+            tools,
+          },
+        };
       } catch (error) {
         lastError = error;
       }
@@ -157,6 +187,8 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJsonBody(request);
+    const requestStarted = performance.now();
+    const requestStartedAt = new Date().toISOString();
     const parsed = agentRequestSchema.safeParse(body);
     if (!parsed.success) throw validationError(parsed.error);
     const input = parsed.data;
@@ -206,6 +238,10 @@ export async function POST(request: Request) {
     const configuredModel = runtime.model;
     let output: AgentOutput;
     let orchestration: Record<string, unknown> | undefined;
+    let providerDurationMs = 0;
+    let tokenUsage = emptyTokenUsage();
+    let tools: AgentToolUse[] = [];
+    let engineAuditLog: AgentTelemetry["auditLog"] = [];
     try {
       if (input.engine === "langgraph") {
         const serviceUrl = environmentBindings.LANGGRAPH_AGENT_URL?.trim();
@@ -237,6 +273,10 @@ export async function POST(request: Request) {
           },
         });
         output = result.output;
+        providerDurationMs = result.metrics.durationMs ?? 0;
+        tokenUsage = result.metrics.tokenUsage ?? emptyTokenUsage();
+        tools = result.metrics.tools ?? [];
+        engineAuditLog = result.metrics.auditLog ?? [];
         orchestration = {
           engine: result.engine,
           threadId: result.threadId,
@@ -245,7 +285,7 @@ export async function POST(request: Request) {
           metrics: result.metrics,
         };
       } else {
-        output = await runLiveAgent(
+        const result = await runLiveAgent(
           runtime,
           input.message,
           input.mode,
@@ -254,6 +294,10 @@ export async function POST(request: Request) {
           input.workspace,
           normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
         );
+        output = result.output;
+        providerDurationMs = result.telemetry.durationMs;
+        tokenUsage = result.telemetry.tokenUsage;
+        tools = result.telemetry.tools;
       }
     } catch (error) {
       if (error instanceof ApiError) throw error;
@@ -278,6 +322,43 @@ export async function POST(request: Request) {
 
     const assessment = assessAgentProposal(output);
     output = assessment.proposal;
+    const completedAt = new Date().toISOString();
+    const telemetry: AgentTelemetry = {
+      durationMs: Math.round(performance.now() - requestStarted),
+      providerDurationMs,
+      tokenUsage,
+      tools,
+      auditLog: [
+        {
+          at: requestStartedAt,
+          stage: "agent.request.received",
+          detail: `Accepted ${input.mode} request for ${input.engine}.`,
+        },
+        {
+          at: requestStartedAt,
+          stage: "agent.context.loaded",
+          detail: `Loaded workspace context with ${input.workspaceFiles?.length ?? 0} attached file(s).`,
+        },
+        ...engineAuditLog,
+        {
+          at: completedAt,
+          stage: "agent.model.completed",
+          detail: `Model completed with ${tokenUsage.totalTokens} reported token(s) and ${tools.length} tool event(s).`,
+        },
+        {
+          at: completedAt,
+          stage: "agent.policy.applied",
+          detail: assessment.normalized
+            ? `Proposal normalized: ${assessment.reasons.join(", ") || "policy constraints applied"}.`
+            : "Proposal passed deterministic policy without normalization.",
+        },
+        {
+          at: completedAt,
+          stage: "agent.persistence.prepared",
+          detail: "Prepared the response, telemetry, and append-only audit record for durable storage.",
+        },
+      ],
+    };
 
     const persisted = await persistAgentRun(database, {
       workspaceId,
@@ -296,6 +377,9 @@ export async function POST(request: Request) {
         }),
       ),
       output,
+      question: input.message,
+      engine: input.engine,
+      telemetry,
     });
 
     await database
@@ -316,6 +400,7 @@ export async function POST(request: Request) {
       ...persisted,
       engine: input.engine,
       orchestration,
+      telemetry,
       proposalPolicy: {
         normalized: assessment.normalized,
         reasons: assessment.reasons,

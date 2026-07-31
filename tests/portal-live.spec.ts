@@ -102,3 +102,51 @@ test("prose-only Agent output is recovered and executes the exact reviewed comma
   await expect(composer).toBeVisible();
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 });
+
+test("benchmark displays answer, tokens, latency, tools, and audit log for both engines", async ({ page }) => {
+  await page.route("**/api/agent", async (route) => {
+    const request = route.request().postDataJSON() as { engine: string; message: string };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        engine: request.engine,
+        model: "gpt-5.1-codex-mini",
+        output: {
+          summary: `${request.engine} benchmark answer`,
+          plan: [],
+          proposedAction: "read_only_answer",
+          riskLevel: "R0",
+          needsApproval: false,
+          evidence: [],
+          artifacts: [],
+          execution: null,
+        },
+        telemetry: {
+          durationMs: request.engine === "langgraph" ? 180 : 120,
+          providerDurationMs: request.engine === "langgraph" ? 160 : 100,
+          tokenUsage: { requests: 1, inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+          tools: [{ name: "read_repository", status: "completed" }],
+          auditLog: [{
+            at: "2026-07-31T00:00:00.000Z",
+            stage: "agent.model.completed",
+            detail: "Model completed with 50 reported token(s).",
+          }],
+        },
+      }),
+    });
+  });
+  await page.goto("http://127.0.0.1:3000/");
+  await page.getByRole("button", { name: "◫ Benchmark" }).click();
+  await page.getByRole("button", { name: "Run comparison" }).click();
+
+  await expect(page.locator(".benchmark-card")).toHaveCount(2);
+  await expect(page.getByText("openai-agents benchmark answer")).toBeVisible();
+  await expect(page.getByText("langgraph benchmark answer")).toBeVisible();
+  await expect(page.getByText("50", { exact: true })).toHaveCount(2);
+  await page.locator(".benchmark-card").first().getByText(/Tools used/).click();
+  await expect(page.locator(".benchmark-card").first()).toContainText("read_repository");
+  await page.locator(".benchmark-card").first().getByText(/Audit log/).click();
+  await expect(page.locator(".benchmark-card").first()).toContainText("agent.model.completed");
+});

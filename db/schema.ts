@@ -140,6 +140,29 @@ export const agentRuns = sqliteTable(
   ],
 );
 
+export const agentRunAudit = sqliteTable(
+  "agent_run_audit",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => agentRuns.id),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    question: text("question").notNull(),
+    answer: text("answer").notNull(),
+    engine: text("engine").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    tokenUsageJson: text("token_usage_json").notNull().default("{}"),
+    toolsJson: text("tools_json").notNull().default("[]"),
+    auditLogJson: text("audit_log_json").notNull().default("[]"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("agent_run_audit_workspace_idx").on(table.workspaceId, table.createdAt),
+  ],
+);
+
 export const idempotencyKeys = sqliteTable(
   "idempotency_keys",
   {

@@ -87,8 +87,21 @@ npm run benchmark:agents
 ```
 
 The machine-readable report is written to
-`outputs/agent-sdk-benchmark.json`. Use the same model, prompt, workspace
-snapshot, iteration count, and runtime limits when interpreting the results.
+`outputs/agent-sdk-benchmark.json`. Each sample includes the exact question and
+answer, end-to-end and provider response time, reported input/output/total
+tokens, tool activity, policy normalization, and a timestamped audit trail.
+The portal's **Benchmark** tab runs the same read-only question against every
+ready engine and displays the same telemetry side by side. Audit records are
+stored durably with the corresponding Agent run. Use the same model, prompt,
+workspace snapshot, iteration count, and runtime limits when interpreting the
+results.
+
+The Portal also includes a `Benchmark` tab for an interactive side-by-side
+comparison. It sends one read-only question to every ready engine and displays
+the returned answer, reported input/output/total tokens, total and provider
+response time, tool events, and the append-only audit trail. Completed runs are
+stored with the workspace and remain available in `Recent audited runs` after
+refreshing the page.
 
 The MCP gateway is optional. Both agent engines filter its tool catalog to
 read/list/search/fetch/query operations. Repository writes, shell commands,
