@@ -12,6 +12,7 @@
     "start:container": "wrangler dev --config wrangler.container.jsonc --ip 0.0.0.0 --port 3000 --persist-to /data",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs tests/*.test.ts && tsx --test companion/*.test.ts",
     "test:e2e": "playwright test tests/portal-live.spec.ts --workers=1",
+    "benchmark:agents": "node tests/sdk-benchmark.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",

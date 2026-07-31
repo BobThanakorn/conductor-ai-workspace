@@ -5,6 +5,7 @@ import {
   resolveAgentRuntimeConfig,
 } from "@/lib/agent-provider";
 import { getEnvironmentBindings } from "@/lib/environment-store";
+import { getLangGraphHealth } from "@/lib/langgraph-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,19 @@ export async function GET() {
       }
     }
     for (const model of models) modelStatus[model] ??= "configured";
+    let langgraph: {
+      ok: boolean;
+      engine?: string;
+      checkpoint?: string;
+      modelConfigured?: boolean;
+    } = { ok: false };
+    if (bindings.LANGGRAPH_AGENT_URL?.trim()) {
+      try {
+        langgraph = await getLangGraphHealth(bindings.LANGGRAPH_AGENT_URL.trim());
+      } catch {
+        langgraph = { ok: false };
+      }
+    }
     return jsonResponse({
       ok: true,
       provider: runtime.provider,
@@ -75,6 +89,14 @@ export async function GET() {
         ...(bindings.VLLM_MODEL && bindings.VLLM_BASE_URL
           ? [{ provider: "vllm", model: bindings.VLLM_MODEL, baseURL: bindings.VLLM_BASE_URL }]
           : []),
+      ],
+      engines: [
+        { id: "openai-agents", name: "OpenAI Agents SDK", status: "ready" },
+        {
+          id: "langgraph",
+          name: "LangChain + LangGraph",
+          status: langgraph.ok && langgraph.modelConfigured ? "ready" : "unavailable",
+        },
       ],
     });
   } catch (error) {

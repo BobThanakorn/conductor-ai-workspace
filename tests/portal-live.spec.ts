@@ -9,6 +9,8 @@ test("chat-first portal is wired to the live local runtime", async ({ page }) =>
   await page.getByRole("button", { name: "Connect current repository" }).click();
   await expect(page.locator(".repository-item").filter({ hasText: "workspace" })).toBeVisible();
   await expect(page.getByLabel("Select model")).toContainText("gpt-5.1-codex-mini · ready");
+  await expect(page.getByLabel("Select agent engine")).toContainText("LangChain + LangGraph · ready");
+  await page.getByLabel("Select agent engine").selectOption("langgraph");
 
   await page.getByRole("button", { name: "⑂ Git" }).click();
   await expect(page.getByRole("heading", { name: "Git workspace" })).toBeVisible();

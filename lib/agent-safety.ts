@@ -140,7 +140,6 @@ export const pythonExecutionSchema = z
 
 const batchExecutionSchema = z
   .array(pythonExecutionSchema)
-  .min(1)
   .max(8)
   .superRefine((executions, context) => {
     const combinedTimeout = executions.reduce((total, execution) => total + execution.timeoutMs, 0);

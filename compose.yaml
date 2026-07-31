@@ -27,6 +27,8 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_AGENT_MODEL: ${OPENAI_AGENT_MODEL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+      LANGGRAPH_AGENT_URL: http://agent-langgraph:8010
+      LANGGRAPH_INTERNAL_TOKEN: ${LANGGRAPH_INTERNAL_TOKEN:-}
     secrets:
       - openai-api-key
       - azure-api-key
@@ -34,6 +36,10 @@ services:
       - conductor-data:/data
     depends_on:
       companion:
+        condition: service_healthy
+      companion-langgraph:
+        condition: service_healthy
+      agent-langgraph:
         condition: service_healthy
     restart: unless-stopped
     security_opt:
@@ -83,8 +89,82 @@ services:
     mem_limit: 2g
     cpus: 2.0
 
+  companion-langgraph:
+    <<: *conductor-image
+    command: ["npm", "run", "companion:git"]
+    init: true
+    ports:
+      - "127.0.0.1:${CONDUCTOR_LANGGRAPH_COMPANION_PORT:-8766}:8765"
+    environment:
+      CONDUCTOR_COMPANION_HOST: 0.0.0.0
+      CONDUCTOR_COMPANION_PORT: 8765
+      CONDUCTOR_WORKSPACE_ROOT: /workspace
+      CONDUCTOR_EXECUTION_MODE: container
+      CONDUCTOR_ALLOWED_ORIGINS: ${CONDUCTOR_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /workspace
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GIT_HTTP_USERNAME: ${GIT_HTTP_USERNAME:-x-access-token}
+      GIT_ASKPASS: /usr/local/bin/conductor-git-askpass
+      GIT_TERMINAL_PROMPT: "0"
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH:-.}
+        target: /workspace
+    secrets:
+      - github-token
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+
+  agent-langgraph:
+    build:
+      context: ./langgraph-agent
+      dockerfile: Dockerfile
+    image: ${CONDUCTOR_LANGGRAPH_IMAGE:-conductor-langgraph-agent:local}
+    init: true
+    environment:
+      AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-https://ai-environment-resource.services.ai.azure.com}
+      AZURE_AI_FOUNDRY_API_KEY: ${AZURE_AI_FOUNDRY_API_KEY:-}
+      AZURE_AI_FOUNDRY_MODEL: ${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-}
+      VLLM_API_KEY: ${VLLM_API_KEY:-EMPTY}
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3.6-35B-A3B}
+      LANGGRAPH_CHECKPOINT_PATH: /data/langgraph/checkpoints.sqlite
+      LANGGRAPH_INTERNAL_TOKEN: ${LANGGRAPH_INTERNAL_TOKEN:-}
+    secrets:
+      - azure-api-key
+    volumes:
+      - langgraph-data:/data/langgraph
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    pids_limit: 192
+    mem_limit: 1g
+    cpus: 1.5
+
 volumes:
   conductor-data:
+  langgraph-data:
 
 secrets:
   openai-api-key:

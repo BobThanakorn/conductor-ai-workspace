@@ -86,6 +86,21 @@ test("accepts a bounded execution batch for existing workspace files", () => {
   assert.equal(assessment.proposal.riskLevel, "R1");
 });
 
+test("accepts an empty optional execution batch from structured providers", () => {
+  const parsed = agentProposalSchema.parse({
+    summary: "Read-only answer.",
+    plan: [],
+    proposedAction: "read_only_answer",
+    riskLevel: "R0",
+    needsApproval: false,
+    evidence: [],
+    artifacts: [],
+    execution: null,
+    executions: [],
+  });
+  assert.deepEqual(parsed.executions, []);
+});
+
 test("accepts detailed implementation plans for complex coding tasks", () => {
   const proposal = agentProposalSchema.parse({
     summary: "Prepare a multi-step Python project proposal.",

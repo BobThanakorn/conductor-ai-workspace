@@ -6,6 +6,13 @@ services:
       mcp-gateway:
         condition: service_started
 
+  agent-langgraph:
+    environment:
+      MCP_GATEWAY_URL: http://mcp-gateway:8811
+    depends_on:
+      mcp-gateway:
+        condition: service_started
+
   mcp-gateway:
     image: docker/mcp-gateway:latest
     use_api_socket: true

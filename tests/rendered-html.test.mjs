@@ -21,6 +21,9 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(page, /<PortalPage\s*\/>/);
   assert.match(page, /\.\/portal\/page/);
   assert.match(portal, /Message the Conductor Agent/);
+  assert.match(portal, /Select agent engine/);
+  assert.match(portal, /selectedEngine === "langgraph"/);
+  assert.match(agentRoute, /runLangGraphAgent/);
   assert.match(portal, /approvedCompanionAction/);
   assert.match(portal, /\/fs\/tree/);
   assert.match(portal, /\/fs\/read/);
@@ -68,6 +71,8 @@ test("builds the Conductor workspace shell", async () => {
   assert.match(agentRoute, /enable_thinking:\s*false/);
   assert.match(agentRoute, /This request is in Ask mode/);
   assert.match(agentRoute, /read_only_answer/);
+  assert.match(agentRoute, /runLangGraphAgent/);
+  assert.match(agentRoute, /input\.engine === "langgraph"/);
   assert.doesNotMatch(provider, /provider:\s*["']demo["']/i);
   assert.doesNotMatch(environmentStore, /demoFileTree|demoDiff|Atlas Engineering|Harden session validation/i);
   assert.ok(Object.keys(JSON.parse(builtManifest)).length > 0);

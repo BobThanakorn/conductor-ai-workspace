@@ -15,6 +15,8 @@ export type AgentEnvironmentBindings = {
   VLLM_MODEL?: string;
   CONDUCTOR_MODEL_OPTIONS?: string;
   MCP_GATEWAY_URL?: string;
+  LANGGRAPH_AGENT_URL?: string;
+  LANGGRAPH_INTERNAL_TOKEN?: string;
 };
 
 export type AgentRuntimeConfig =

@@ -34,6 +34,7 @@ import {
   resolveAgentModelOptions,
   type AgentRuntimeConfig,
 } from "@/lib/agent-provider";
+import { runLangGraphAgent } from "@/lib/langgraph-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -204,17 +205,58 @@ export async function POST(request: Request) {
     runtime = resolveAgentRuntimeConfigForModel(environmentBindings, input.model ?? runtime.model);
     const configuredModel = runtime.model;
     let output: AgentOutput;
+    let orchestration: Record<string, unknown> | undefined;
     try {
-      output = await runLiveAgent(
-        runtime,
-        input.message,
-        input.mode,
-        context,
-        input.workspaceFiles ?? [],
-        input.workspace,
-        normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
-      );
+      if (input.engine === "langgraph") {
+        const serviceUrl = environmentBindings.LANGGRAPH_AGENT_URL?.trim();
+        if (!serviceUrl) {
+          throw new ApiError(
+            503,
+            "langgraph_unconfigured",
+            "The LangGraph Agent service is not configured.",
+          );
+        }
+        const result = await runLangGraphAgent({
+          serviceUrl,
+          serviceToken: environmentBindings.LANGGRAPH_INTERNAL_TOKEN?.trim(),
+          runtime,
+          context,
+          input: {
+            message: input.message,
+            mode: input.mode,
+            model: configuredModel,
+            workspaceId,
+            taskId: input.taskId,
+            runId: idempotencyKey,
+            workspaceFiles: input.workspaceFiles ?? [],
+            workspace: input.workspace ?? {
+              repository: context.workspace.repository,
+              branch: context.workspace.activeBranch,
+              headSha: context.workspace.baseSha,
+            },
+          },
+        });
+        output = result.output;
+        orchestration = {
+          engine: result.engine,
+          threadId: result.threadId,
+          checkpointId: result.checkpointId,
+          status: result.status,
+          metrics: result.metrics,
+        };
+      } else {
+        output = await runLiveAgent(
+          runtime,
+          input.message,
+          input.mode,
+          context,
+          input.workspaceFiles ?? [],
+          input.workspace,
+          normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
+        );
+      }
     } catch (error) {
+      if (error instanceof ApiError) throw error;
       console.error("Agent provider request failed after retry", error instanceof Error ? error.message : "unknown provider error");
       throw new ApiError(
         502,
@@ -272,12 +314,18 @@ export async function POST(request: Request) {
 
     return jsonResponse({
       ...persisted,
+      engine: input.engine,
+      orchestration,
       proposalPolicy: {
         normalized: assessment.normalized,
         reasons: assessment.reasons,
       },
     });
   } catch (error) {
+    console.error(
+      "Agent route failed",
+      error instanceof Error ? `${error.name}: ${error.message}` : "unknown error",
+    );
     const body = errorBody(error);
     if (database && scope && idempotencyKey && ownerToken) {
       await storeIdempotentError(

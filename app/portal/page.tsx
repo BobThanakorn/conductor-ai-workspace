@@ -4,9 +4,15 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import "./portal.css";
 
 const COMPANION_URL = "http://127.0.0.1:8765";
+const LANGGRAPH_COMPANION_URL = "http://127.0.0.1:8766";
 const DEFAULT_WORKSPACE_ID = "workspace_local";
 
 type ModelStatus = "ready" | "configured" | "unavailable";
+type AgentEngine = {
+  id: "openai-agents" | "langgraph";
+  name: string;
+  status: ModelStatus;
+};
 type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -145,19 +151,20 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 async function approvedCompanionAction<T>(
+  companionUrl: string,
   action: string,
   endpoint: string,
   input: Record<string, unknown>,
 ): Promise<T> {
   const request = await readJson<{ approvalId: string; digest: string }>(
-    await fetch(`${COMPANION_URL}/approvals/request`, {
+    await fetch(`${companionUrl}/approvals/request`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, input }),
     }),
   );
   const approved = await readJson<{ token: string }>(
-    await fetch(`${COMPANION_URL}/approvals/approve`, {
+    await fetch(`${companionUrl}/approvals/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -168,7 +175,7 @@ async function approvedCompanionAction<T>(
     }),
   );
   return readJson<T>(
-    await fetch(`${COMPANION_URL}${endpoint}`, {
+    await fetch(`${companionUrl}${endpoint}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -199,6 +206,10 @@ export default function PortalPage() {
   const [models, setModels] = useState<string[]>([]);
   const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>({});
   const [selectedModel, setSelectedModel] = useState("");
+  const [engines, setEngines] = useState<AgentEngine[]>([
+    { id: "openai-agents", name: "OpenAI Agents SDK", status: "ready" },
+  ]);
+  const [selectedEngine, setSelectedEngine] = useState<AgentEngine["id"]>("openai-agents");
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
   const [terminalOutput, setTerminalOutput] = useState("");
   const [executionResults, setExecutionResults] = useState<ExecutionResult[]>([]);
@@ -211,6 +222,9 @@ export default function PortalPage() {
   const [repositoryFilter, setRepositoryFilter] = useState("");
 
   const activeTask = workspace.activeTask ?? workspace.tasks?.[0] ?? null;
+  const companionUrl = selectedEngine === "langgraph"
+    ? LANGGRAPH_COMPANION_URL
+    : COMPANION_URL;
   const companionReady = health?.ok === true;
   const selectedRepository = repositories.find((repository) => repository.id === selectedWorkspaceId);
   const workspaceRuntimeReady = companionReady &&
@@ -234,10 +248,10 @@ export default function PortalPage() {
     const workspaceQuery = new URLSearchParams({ workspaceId: selectedWorkspaceId });
     if (selectedTaskId) workspaceQuery.set("taskId", selectedTaskId);
     const results = await Promise.allSettled([
-      fetch(`${COMPANION_URL}/health`, { cache: "no-store" }).then(readJson<CompanionHealth>),
-      fetch(`${COMPANION_URL}/fs/tree?path=.&depth=6`, { cache: "no-store" })
+      fetch(`${companionUrl}/health`, { cache: "no-store" }).then(readJson<CompanionHealth>),
+      fetch(`${companionUrl}/fs/tree?path=.&depth=6`, { cache: "no-store" })
         .then(readJson<{ entries: FileEntry[] }>),
-      fetch(`${COMPANION_URL}/git/status`, { cache: "no-store" })
+      fetch(`${companionUrl}/git/status`, { cache: "no-store" })
         .then(readJson<{ files?: GitFile[]; head?: string }>),
       fetch(`/api/workspace?${workspaceQuery}`, { cache: "no-store" })
         .then(readJson<WorkspaceState>),
@@ -248,6 +262,7 @@ export default function PortalPage() {
           models?: string[];
           model?: string;
           modelStatus?: Record<string, ModelStatus>;
+          engines?: AgentEngine[];
         }>),
     ]);
 
@@ -295,6 +310,15 @@ export default function PortalPage() {
       ].filter((value): value is string => Boolean(value))));
       setModels(options);
       setModelStatus(modelResult.value.modelStatus ?? {});
+      const nextEngines = modelResult.value.engines?.length
+        ? modelResult.value.engines
+        : [{ id: "openai-agents" as const, name: "OpenAI Agents SDK", status: "ready" as const }];
+      setEngines(nextEngines);
+      setSelectedEngine((current) =>
+        nextEngines.some((engine) => engine.id === current && engine.status === "ready")
+          ? current
+          : nextEngines.find((engine) => engine.status === "ready")?.id ?? "openai-agents",
+      );
       const firstReady = options.find((model) =>
         (modelResult.value.modelStatus?.[model] ?? "configured") === "ready",
       ) ?? "";
@@ -302,7 +326,7 @@ export default function PortalPage() {
         current && options.includes(current) ? current : firstReady,
       );
     }
-  }, [messages.length, selectedTaskId, selectedWorkspaceId]);
+  }, [companionUrl, messages.length, selectedTaskId, selectedWorkspaceId]);
 
   useEffect(() => {
     const pending = window.setTimeout(() => void refresh(), 0);
@@ -393,7 +417,7 @@ export default function PortalPage() {
         root: string;
         branch: string;
         head: string;
-      }>("git.clone", "/git/clone", { url: repositoryUrl.trim() });
+      }>(companionUrl, "git.clone", "/git/clone", { url: repositoryUrl.trim() });
       const registered = await readJson<{ repository: { id: string } }>(
         await fetch("/api/repositories", {
           method: "POST",
@@ -429,7 +453,7 @@ export default function PortalPage() {
     setError("");
     try {
       await readJson(
-        await fetch(`${COMPANION_URL}/workspace/select`, {
+        await fetch(`${companionUrl}/workspace/select`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: repository.path }),
@@ -460,7 +484,7 @@ export default function PortalPage() {
     setError("");
     try {
       const data = await readJson<{ content: string }>(
-        await fetch(`${COMPANION_URL}/fs/read`, {
+        await fetch(`${companionUrl}/fs/read`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path }),
@@ -504,7 +528,12 @@ export default function PortalPage() {
       text: message,
     }]);
     try {
-      const data = await readJson<{ output?: AgentProposal; model?: string }>(
+      const data = await readJson<{
+        output?: AgentProposal;
+        model?: string;
+        engine?: string;
+        orchestration?: { checkpointId?: string; status?: string };
+      }>(
         await fetch("/api/agent", {
           method: "POST",
           headers: {
@@ -514,6 +543,7 @@ export default function PortalPage() {
           body: JSON.stringify({
             message,
             mode: agentMode,
+            engine: selectedEngine,
             model: selectedModel,
             taskId: activeTask?.id,
             workspaceId: selectedWorkspaceId,
@@ -546,7 +576,7 @@ export default function PortalPage() {
       setMessages((current) => [...current, {
         id: `${key}-response`,
         role: "assistant",
-        text: proposalOutput.summary,
+        text: `${proposalOutput.summary}${data.engine === "langgraph" && data.orchestration?.checkpointId ? `\n\nLangGraph checkpoint: ${data.orchestration.checkpointId.slice(0, 12)}` : ""}`,
         plan: proposalOutput.plan,
       }]);
       if (agentMode === "agent" && (
@@ -586,6 +616,7 @@ export default function PortalPage() {
     try {
       if (proposal.artifacts?.length) {
         await approvedCompanionAction(
+          companionUrl,
           "fs.write",
           "/fs/write",
           {
@@ -601,6 +632,7 @@ export default function PortalPage() {
           timeoutMs: execution.timeoutMs ?? 120_000,
         }));
         const result = await approvedCompanionAction<{ results: ExecutionResult[] }>(
+          companionUrl,
           "terminal.execute-batch",
           "/terminal/execute-batch",
           { commands },
@@ -624,6 +656,7 @@ export default function PortalPage() {
     setError("");
     try {
       const result = await approvedCompanionAction<{ head?: string; stdout?: string }>(
+        companionUrl,
         "git.commit",
         "/git/commit",
         { paths: gitFiles.map((file) => file.path), message },
@@ -644,6 +677,7 @@ export default function PortalPage() {
     setError("");
     try {
       const result = await approvedCompanionAction<{ stdout?: string; stderr?: string }>(
+        companionUrl,
         "git.remote",
         "/git/action",
         { operation: "push", args: [] },
@@ -670,6 +704,7 @@ export default function PortalPage() {
         url?: string;
         cloneUrl?: string;
       }>(
+        companionUrl,
         "github.create-repository",
         "/provider/github/repository",
         { name, description: "", private: repositoryPrivate, autoInit: false },
@@ -900,6 +935,13 @@ export default function PortalPage() {
                     <button type="button" className={agentMode === "agent" ? "selected" : ""} onClick={() => setAgentMode("agent")}>Agent</button>
                     <span className="context-count">{contextFiles.length} context file(s)</span>
                     <span className="composer-spacer" />
+                    <select value={selectedEngine} onChange={(event) => setSelectedEngine(event.target.value as AgentEngine["id"])} aria-label="Select agent engine">
+                      {engines.map((engine) => (
+                        <option key={engine.id} value={engine.id} disabled={engine.status !== "ready"}>
+                          {engine.name} · {engine.status}
+                        </option>
+                      ))}
+                    </select>
                     <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model">
                       {!models.length && <option value="">No ready model</option>}
                       {models.map((model) => {

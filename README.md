@@ -7,6 +7,9 @@ proposals before the execution companion changes a real repository.
 
 - OpenAI Agents SDK orchestration with Azure AI Foundry as the preferred model
   provider and an OpenAI-compatible alternative.
+- A parallel LangChain + LangGraph orchestration service using the same Azure
+  model configuration, proposal contract, approval policy, repository state,
+  Git/GitHub integration, and execution companion behavior.
 - Complete, multi-language file proposals rendered in the editor before apply.
 - Real repository filesystem tree/read/write/delete through the companion.
 - Real terminal execution with stdout, stderr, exit code, timeout, and duration.
@@ -49,7 +52,45 @@ docker compose -f compose.yaml -f compose.azure.yaml -f compose.mcp.yaml up --bu
 docker compose -f compose.yaml -f compose.azure.yaml -f compose.github.yaml up --build
 ```
 
-The MCP gateway is optional. The Agents SDK filters its tool catalog to
+## Agent engines
+
+The portal can run the same request through either:
+
+- `OpenAI Agents SDK` — the existing TypeScript orchestration engine.
+- `LangChain + LangGraph` — an isolated Python service with SQLite-backed
+  LangGraph checkpoints.
+
+Both engines return the same reviewed proposal schema. Neither engine writes
+files, runs commands, or performs Git mutations directly. The browser requests
+a payload-bound approval from the selected execution companion before any
+side effect. The LangGraph engine uses a second companion on port `8766` so
+the two engines never share mutable repository-selection state.
+
+Start the complete local system:
+
+```powershell
+docker compose up -d --build
+```
+
+Health checks:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/health
+Invoke-RestMethod http://127.0.0.1:8766/health
+Invoke-RestMethod http://127.0.0.1:3000/api/models
+```
+
+Run the comparable Ask-mode benchmark after both engines report `ready`:
+
+```powershell
+npm run benchmark:agents
+```
+
+The machine-readable report is written to
+`outputs/agent-sdk-benchmark.json`. Use the same model, prompt, workspace
+snapshot, iteration count, and runtime limits when interpreting the results.
+
+The MCP gateway is optional. Both agent engines filter its tool catalog to
 read/list/search/fetch/query operations. Repository writes, shell commands,
 remote Git publication, and pull requests stay behind Conductor's one-time
 approval flow.
