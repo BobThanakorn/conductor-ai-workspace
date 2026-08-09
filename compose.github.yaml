@@ -1,8 +1,9 @@
 services:
-  companion:
-    secrets:
-      - github-token
-
-secrets:
-  github-token:
-    file: ${GITHUB_TOKEN_FILE:-./secret.github-token}
+  web:
+    environment:
+      # GitHub App values are consumed only by server routes. Installation
+      # tokens are minted per request and never enter either companion.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      CONDUCTOR_PUBLICATION_SIGNING_SECRET: ${CONDUCTOR_PUBLICATION_SIGNING_SECRET:-}

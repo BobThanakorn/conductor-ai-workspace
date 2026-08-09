@@ -8,6 +8,9 @@ export type AgentTokenUsage = {
 export type AgentToolUse = {
   name: string;
   status: "called" | "completed" | "failed";
+  source?: "model" | "mcp" | "companion" | "framework";
+  risk?: "read" | "write" | "execute" | "external";
+  approved?: boolean;
 };
 
 export type AgentAuditEvent = {

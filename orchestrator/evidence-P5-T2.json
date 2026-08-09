@@ -1,0 +1,87 @@
+{
+  "taskId": "P5-T2",
+  "workerId": "codex",
+  "status": "ready_for_independent_review",
+  "summary": "Implemented owner-scoped automations with authenticated manual, schedule, webhook and allowlisted-command triggers; immutable versioned agent/skill profiles; idempotent leased run materialization; snapshot-bound tasks; cancel/replay; append-only audit; and a real API-backed accessible Portal control center.",
+  "files": [
+    "app/api/automations/route.ts",
+    "app/api/automations/tick/route.ts",
+    "app/api/automations/webhook/route.ts",
+    "app/portal/automations-panel.tsx",
+    "app/portal/automations-panel.module.css",
+    "app/portal/page.tsx",
+    "lib/automation-contract.ts",
+    "lib/server-principal.ts",
+    "lib/environment-store.ts",
+    "db/schema.ts",
+    "drizzle/0007_steady_tomorrow_man.sql",
+    "drizzle/meta/0007_snapshot.json",
+    "drizzle/meta/_journal.json",
+    "tests/automation-contract.test.ts",
+    "tests/automation-behavior.test.mjs",
+    "tests/automation-live-smoke.ts",
+    "tests/server-principal.test.ts",
+    "tests/portal-live.spec.ts",
+    ".env.example",
+    "compose.yaml",
+    "README.md"
+  ],
+  "scopeExpansion": {
+    "reason": "Owner identity, durable scheduling, crash recovery, immutable run manifests, and runtime-only scheduler/webhook credentials require shared server-principal, D1 schema, Compose and documentation changes beyond the declared app/lib/db surface.",
+    "paths": [".env.example", "compose.yaml", "README.md", "tests"]
+  },
+  "acceptanceEvidence": {
+    "ownershipAndScope": "Browser bodies cannot choose an actor. Hosted identity is trusted only with an explicit server flag; local operation requires a short-lived signed human identity scoped to the workspace. Every profile, automation, run, event and snapshot query is owner/workspace scoped.",
+    "versionedProfiles": "Agent and skill definitions are schema-bounded and stored as append-only versions. Database triggers reject profile UPDATE and DELETE. Automations pin exact agent and skill versions, and every run stores those exact definitions in an immutable snapshot manifest.",
+    "safeTriggers": "Manual and named-command runs require the signed owner. Schedules require an exact-body HMAC scheduler principal and compare-and-swap due-slot claim. Webhooks require exact-body HMAC authentication. Paused automations cannot create new runs.",
+    "idempotencyAndRecovery": "Run reservation uses a unique automation/idempotency key before task creation. Materialization uses a bounded lease, deterministic task/snapshot/event inserts, expired-lease recovery, and lease-owner finalization.",
+    "approvalBoundary": "Automations create planning tasks and proposals only. Generated task goals explicitly require human approval before file mutation, command execution, commit, push, merge or publication; no route can auto-approve or auto-execute a proposal.",
+    "cancelAndReplay": "Cancellation withdraws pending approvals, cancels the task, clears leases and records an append-only event. Replay derives the original owner-scoped automation but creates a fresh run, task and repository snapshot.",
+    "portal": "The Automations tab edits typed agent/skill profiles, selects exact immutable versions, builds all four trigger types, pauses/resumes, runs allowed triggers, and exposes snapshot-bound history, immutable events, cancellation and replay. Local identity tokens remain page-memory input and are not persisted."
+  },
+  "reviewerBlockerCorrections": {
+    "pausedReplay": "Both direct run and replay now fail with automation_paused when the owner has paused the automation.",
+    "snapshotUniqueness": "Each run receives a cryptographically random UUID snapshot identifier; the immutable manifest still captures the exact base/head and profile versions.",
+    "schedulerRecovery": "A scheduled slot is reserved/materialized before next_run_at advances, exact-slot eligibility is checked during reservation, and every expired schedule:* materializer lease is recovered independently of the current next_run_at.",
+    "webhookScopeBinding": "The webhook HMAC now covers workspace ID, hook ID and exact request body bytes, preventing reuse of a valid signature against another route scope.",
+    "cancelRace": "Run cancellation is a conditional state transition; approval/task changes and the audit insert are conditioned on that exact committed timestamp. A concurrent completion yields 409 without mutating the completed task or its pending approval."
+  },
+  "checks": [
+    {
+      "command": "node --test --experimental-strip-types tests/automation-contract.test.ts tests/server-principal.test.ts tests/automation-behavior.test.mjs",
+      "exitCode": 0,
+      "summary": "10 focused tests passed for bounded triggers/profiles, owner authentication, scheduler/webhook scope binding, approval gating, idempotent reservation, crash recovery, cancellation race safety and immutable profile/event/snapshot data."
+    },
+    {
+      "command": "npm run db:generate",
+      "exitCode": 0,
+      "summary": "Drizzle read all 20 tables and reported no schema changes; migration metadata is coherent."
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "summary": "TypeScript validation passed after the final automation hardening changes."
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "summary": "ESLint passed after the final automation hardening changes."
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "summary": "Production build passed after reviewer corrections; 117 application tests passed, 0 failed, 1 opt-in live harness skipped; 18 companion tests passed, 0 failed."
+    },
+    {
+      "command": "npm run test:e2e",
+      "exitCode": 0,
+      "summary": "Full Playwright runtime suite passed 8/8, including authenticated Automations profile creation, trigger creation, queued run, audit detail and cancellation."
+    },
+    {
+      "command": "temporary scheduler secret + docker compose web rebuild + npm run test:automation-live + secret removal/recreate",
+      "exitCode": 0,
+      "summary": "Live Docker API created immutable profiles and automations, proved duplicate run idempotency, cancellation, fresh replay, paused run/replay rejection, unsigned scheduler rejection, signed scheduler acceptance, workspace+hook-bound webhook acceptance, and cross-hook signature replay rejection. The web container was then recreated without either temporary secret; final runtime ready=true, scheduler=false and webhook=false."
+    }
+  ],
+  "externalActions": "No commit, push, merge, publication, provider mutation, secret persistence or secret rotation was performed."
+}

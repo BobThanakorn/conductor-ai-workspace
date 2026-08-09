@@ -1,11 +1,10 @@
-import { exec, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import { normalizeRepositoryRelativePath } from "./workspace-path";
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 export const MAX_OUTPUT_BYTES = 512_000;
 export const MAX_FILE_BYTES = 1_000_000;
@@ -43,7 +42,114 @@ export type ProcessBatchResult = {
  * unchanged.
  */
 export function normalizeRuntimeCommand(command: string) {
-  return command.trim().replace(/^python(?=\s|$)/i, "python3");
+  const normalized = command.trim().replace(/^python(?=\s|$)/i, "python3");
+  parseBoundedCommand(normalized);
+  return normalized;
+}
+
+type BoundedCommand = { executable: "node" | "npm" | "python3" | "git" | "tsc"; args: string[] };
+
+function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (const character of command) {
+    if (escaped) { current += character; escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (quote) {
+      if (character === quote) quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') { quote = character; continue; }
+    if (/\s/.test(character)) {
+      if (current) { tokens.push(current); current = ""; }
+      continue;
+    }
+    current += character;
+  }
+  if (escaped || quote || current.length === 0 && tokens.length === 0) throw new Error("Command quoting is invalid.");
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function isWorkspaceRelativeScript(value: string) {
+  return value.length <= 240 && !value.startsWith("-") && !path.isAbsolute(value) && !value.includes("\\") && !value.split("/").some((part) => part === "" || part === "." || part === "..");
+}
+
+function parseBoundedCommand(command: string): BoundedCommand {
+  if (command.length > 4_000 || command.includes("\0")) {
+    throw new Error("Command exceeds the execution policy.");
+  }
+  const [executable, ...args] = tokenizeCommand(command);
+  if (executable === "node") {
+    if (!(args.length >= 1 && isWorkspaceRelativeScript(args[0]))) throw new Error("Node execution requires a workspace-relative script.");
+    return { executable, args };
+  }
+  if (executable === "npm") {
+    if (!((args[0] === "test" && args.length === 1) || (args[0] === "run" && args.length === 2 && /^[A-Za-z0-9:_-]{1,120}$/.test(args[1] ?? "")))) throw new Error("Only npm test or a named npm run script is allowed.");
+    return { executable, args };
+  }
+  if (executable === "python3") {
+    if (!args[0] || !isWorkspaceRelativeScript(args[0])) throw new Error("Python execution requires a workspace-relative script.");
+    return { executable, args };
+  }
+  if (executable === "tsc") {
+    if (!args.every((arg) => arg === "--noEmit" || arg === "-p" || isWorkspaceRelativeScript(arg))) throw new Error("TypeScript execution is outside the bounded policy.");
+    return { executable, args };
+  }
+  if (executable === "git") {
+    const verb = args[0];
+    if (!verb || !new Set(["status", "diff", "log", "show", "branch", "rev-parse"]).has(verb)) {
+      throw new Error("Remote Git commands, aliases, and publication commands are permanently retired.");
+    }
+    return { executable, args };
+  }
+  throw new Error("Executable is not in the bounded execution allowlist.");
+}
+
+async function assertNpmLifecycleSafe(root: string, args: string[]): Promise<void> {
+  const scriptName = args[0] === "test" ? "test" : args[1];
+  if (!scriptName) throw new Error("npm script is invalid.");
+  let packageJson: { scripts?: Record<string, unknown> };
+  try {
+    packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, unknown> };
+  } catch {
+    throw new Error("npm execution requires a readable workspace package.json.");
+  }
+  for (const name of [`pre${scriptName}`, scriptName, `post${scriptName}`]) {
+    const script = packageJson.scripts?.[name];
+    if (script === undefined) continue;
+    if (typeof script !== "string") throw new Error("npm script is invalid.");
+    if (/(?:\bgit\s+(?:push|send-pack|remote|fetch|pull|clone)\b|\b(?:curl|wget|npx|npm\s+(?:exec|publish|install)|ssh|scp|ftp)\b|\b(?:sh|bash|zsh|cmd|powershell|pwsh)\b|https?:\/\/)/i.test(script)) {
+      throw new Error("npm lifecycle script is outside the bounded no-publication/no-network policy.");
+    }
+  }
+}
+
+function boundedEnvironment(safeDirectory?: string): NodeJS.ProcessEnv {
+  // Do not inherit provider, GitHub, PAT, proxy, or caller-supplied credential
+  // variables into a reviewed child process.
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME ?? process.env.USERPROFILE ?? "/tmp",
+    TMPDIR: process.env.TMPDIR ?? process.env.TEMP,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    SystemRoot: process.env.SystemRoot,
+    NODE_ENV: "production",
+    CI: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    ...(safeDirectory ? {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "safe.directory",
+      GIT_CONFIG_VALUE_0: safeDirectory,
+    } : {}),
+    GIT_PAGER: "cat",
+    PAGER: "cat",
+  };
 }
 
 export function resolveWorkspacePath(root: string, requested: string) {
@@ -56,7 +162,7 @@ export function resolveWorkspacePath(root: string, requested: string) {
 
 export async function listWorkspace(root: string, requested = ".", depth = 4) {
   const base = requested === "." ? path.resolve(root) : resolveWorkspacePath(root, requested).resolved;
-  const ignored = new Set([".git", "node_modules", "dist", ".next", ".vinext", ".wrangler"]);
+  const ignored = new Set([".git", ".conductor", "node_modules", "dist", ".next", ".vinext", ".wrangler"]);
   const isSensitiveOrGenerated = (name: string) =>
     name === ".env" ||
     (name.startsWith(".env.") && name !== ".env.example") ||
@@ -137,18 +243,21 @@ export async function runShell(root: string, input: Record<string, unknown>): Pr
     throw new Error("Generic terminal execution is disabled outside the container. Use Docker Compose or set CONDUCTOR_ALLOW_HOST_EXECUTION=true explicitly.");
   }
   const command = typeof input.command === "string" ? normalizeRuntimeCommand(input.command) : "";
-  if (!command || command.length > 4_000 || command.includes("\0")) throw new Error("command is invalid.");
+  if (!command) throw new Error("command is invalid.");
+  const parsedCommand = parseBoundedCommand(command);
   const cwdInput = typeof input.cwd === "string" && input.cwd !== "." ? input.cwd : undefined;
   const cwd = cwdInput ? resolveWorkspacePath(root, cwdInput).resolved : root;
+  if (parsedCommand.executable === "npm") await assertNpmLifecycleSafe(cwd, parsedCommand.args);
   const timeoutMs = Math.min(Math.max(Number(input.timeoutMs) || 30_000, 100), 300_000);
   const started = Date.now();
   try {
-    const result = await execAsync(command, {
+    const result = await execFileAsync(parsedCommand.executable, parsedCommand.args, {
       cwd,
       timeout: timeoutMs,
       maxBuffer: MAX_OUTPUT_BYTES,
       windowsHide: true,
-      env: { ...process.env, CI: "1", GIT_TERMINAL_PROMPT: "0", PAGER: "cat", GIT_PAGER: "cat" },
+      env: boundedEnvironment(root),
+      shell: false,
     });
     return { ...result, exitCode: 0, timedOut: false, durationMs: Date.now() - started };
   } catch (error) {
@@ -210,6 +319,7 @@ export async function runGit(root: string, args: string[], timeout = 60_000) {
     maxBuffer: MAX_OUTPUT_BYTES,
     windowsHide: true,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", PAGER: "cat" },
+    env: boundedEnvironment(root),
+    shell: false,
   });
 }

@@ -1,0 +1,12 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+const required=["artifacts/container-evidence/summary.json","orchestrator/worker-evidence-P6-T1.json","orchestrator/worker-evidence-P6-T2.json","artifacts/operations-clean.sqlite.recovery.json"];
+const missing=required.filter((file)=>!existsSync(file));if(missing.length)throw new Error(`release gate missing evidence: ${missing.join(', ')}`);
+const hash=(file)=>createHash("sha256").update(readFileSync(file)).digest("hex"),container=JSON.parse(readFileSync(required[0])),p6t1=JSON.parse(readFileSync(required[1])),p6t2=JSON.parse(readFileSync(required[2])),recovery=JSON.parse(readFileSync(required[3]));
+const sourceDigest=execFileSync(process.execPath,["scripts/source-digest.mjs","."],{encoding:"utf8"}).trim(),root=container.images?.find((item)=>item.image==="conductor-ai-workspace:0.1.0");
+if(p6t1.taskId!=="P6-T1"||p6t1.status!=="ready_for_independent_review"||p6t2.taskId!=="P6-T2"||p6t2.status!=="ready_for_independent_review")throw new Error("release gate rejects unexpected task evidence status");
+if(container.complete!==true||!root||root.status!=="passed"||root.sourceDigest!==sourceDigest)throw new Error("release gate rejects unbound or incomplete container evidence");
+if(!recovery.restoredProof||!recovery.rollbackProof||recovery.rpoSeconds!==0||!Number.isFinite(recovery.rtoMs)||recovery.rtoMs<0||recovery.before?.integrity!=="ok"||recovery.after?.integrity!=="ok"||!recovery.before?.dataDigest||recovery.before.dataDigest!==recovery.after?.dataDigest||recovery.before?.schemaDigest!==recovery.after?.schemaDigest)throw new Error("release gate rejects invalid recovery proof");
+if(!Array.isArray(p6t2.checks)||p6t2.checks.some((check)=>check.exitCode!==0))throw new Error("release gate rejects incomplete P6-T2 checks");
+const result={releasedAt:new Date().toISOString(),status:"passed",sourceDigest,rootImageId:root.imageId,containerSummaryDigest:hash(required[0]),recoveryReportDigest:hash(required[3]),p6t1Status:p6t1.status,p6t2Status:p6t2.status};writeFileSync("artifacts/release-evidence.json",JSON.stringify(result,null,2));console.log(JSON.stringify(result));

@@ -1,0 +1,19 @@
+{
+  "summary": "The portal comparison surface now consumes the live ready-engine registry, displays per-engine answers with model/source telemetry, and keeps Contract v2 approval, execution output, tools and audit diagnostics visible in the chat workflow. Mutation responses without a Contract v2 binding fail closed instead of showing an apply button that cannot be safely executed.",
+  "files": [
+    { "path": "app/portal/page.tsx", "change": "modified", "purpose": "Render only ready engines, model selection, benchmark cards, token/latency/tool/audit metrics, persistent execution output, and Contract v2 failure diagnostics." },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Return normalized engine/model/telemetry/context and the Contract v2 approval binding consumed by the portal." },
+    { "path": "tests/portal-live.spec.ts", "change": "modified", "purpose": "Cover live runtime connection, exclusion of configured/unavailable engines, approval/apply/run, prose recovery, persistent output and comparison metrics." }
+  ],
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed." },
+    { "command": "npm run lint", "exitCode": 0, "summary": "ESLint passed." },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "All six live browser tests passed, including explicit exclusion of configured/unavailable engines, comparison metrics/audit UI and approval execution visibility." }
+  ],
+  "risks": [
+    "The browser comparison is limited to engines whose live readiness endpoint reports ready; unconfigured providers are intentionally omitted and are not represented as fake working engines."
+  ],
+  "followUps": [
+    "P2-T2 remains the next execution-safety milestone: isolate each mutating task in its own Git worktree before concurrent multi-agent execution."
+  ]
+}

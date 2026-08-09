@@ -1,0 +1,50 @@
+{
+  "summary": "Implemented and independently validated a persistent, workspace-scoped MCP registry with allowlisted registration, authenticated lifecycle operations, capability discovery, provenance-labelled tools, revocation, append-only audit events, and exact read-tool exposure to the OpenAI Agents runtime. The live Docker MCP Gateway and GitHub Official MCP server were exercised without exposing credentials.",
+  "files": [
+    { "path": "lib/mcp-contract.ts", "change": "added", "purpose": "Strict lifecycle, registry, tool-risk and provenance contracts" },
+    { "path": "lib/mcp-gateway.ts", "change": "added", "purpose": "Bounded streamable-HTTP handshake and sanitized capability discovery" },
+    { "path": "lib/mcp-registry.ts", "change": "added", "purpose": "Workspace registry, allowlist, lifecycle, revocation and fail-closed runtime materialization" },
+    { "path": "app/api/mcp/route.ts", "change": "added", "purpose": "Public sanitized registry reads and administrator-authenticated mutations" },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Connect only enabled registry servers and expose exact persisted read tools" },
+    { "path": "lib/agent-provider.ts", "change": "modified", "purpose": "Server-only MCP bindings" },
+    { "path": "lib/environment-store.ts", "change": "modified", "purpose": "Runtime D1 schema, indexes and append-only lifecycle triggers" },
+    { "path": "db/schema.ts", "change": "modified", "purpose": "Durable Drizzle schema for MCP registry and events" },
+    { "path": "drizzle/0005_fair_psynapse.sql", "change": "added", "purpose": "Fresh-install MCP schema, indexes and append-only triggers" },
+    { "path": "compose.mcp.yaml", "change": "modified", "purpose": "Authenticated internal gateway endpoint, explicit host/port and runtime-only secret file" },
+    { "path": ".env.example", "change": "modified", "purpose": "Document server-only MCP configuration" },
+    { "path": "package.json", "change": "modified", "purpose": "MCP lifecycle scripts" },
+    { "path": "tests/mcp-contract.test.ts", "change": "added", "purpose": "Lifecycle payload boundaries" },
+    { "path": "tests/mcp-gateway.test.ts", "change": "added", "purpose": "Protocol, URL policy, provenance and sanitized failure tests" },
+    { "path": "tests/mcp-registry.test.ts", "change": "added", "purpose": "Allowlist, admin gate, durable lifecycle, revocation and read-only runtime tests" }
+  ],
+  "scopeExpansion": {
+    "paths": ["db/schema.ts", "drizzle/0005_fair_psynapse.sql"],
+    "reason": "The roadmap requires a persistent registry. The site uses D1, so the runtime CREATE TABLE path alone was insufficient for fresh installs and releases; a generated, inspected migration is required."
+  },
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed after final schema and Compose corrections" },
+    { "command": "npm run lint", "exitCode": 0, "summary": "Repository lint passed" },
+    { "command": "npm test", "exitCode": 0, "summary": "Build passed; 81 application tests passed with 1 opt-in live harness skip and all 15 companion tests passed after the security-review fixes" },
+    { "command": "node --experimental-strip-types --test tests/mcp-contract.test.ts tests/mcp-gateway.test.ts tests/mcp-registry.test.ts", "exitCode": 0, "summary": "9 MCP contract, gateway and registry tests passed, including malicious credential echo and deceptive tool-name regressions" },
+    { "command": "npm run db:generate", "exitCode": 0, "summary": "Generated drizzle/0005_fair_psynapse.sql for two MCP tables" },
+    { "command": "fresh local D1 migration replay", "exitCode": 0, "summary": "All migrations applied to a new local D1; two MCP tables and two append-only triggers were present" },
+    { "command": "docker compose -f compose.yaml -f compose.mcp.yaml config", "exitCode": 0, "summary": "Merged MCP Compose configuration is valid; test-only environment overrides were used and rendered output was suppressed so credentials were not printed" },
+    { "command": "live Docker MCP registry lifecycle", "exitCode": 0, "summary": "Gateway loaded GitHub Official MCP; after hardened metadata validation the registry normalized all 44 tools, marked 26 explicitly annotated tools read-only, gated 18 side-effect tools, completed connect/disconnect/reconnect/revoke, and denied reconnect after revoke with HTTP 409" },
+    { "command": "live OpenAI Agents MCP connection", "exitCode": 0, "summary": "gpt-5.1-codex-mini Ask request completed and telemetry recorded an MCP connection with no failed MCP connection event" },
+    { "command": "live append-only tamper attempt", "exitCode": 0, "summary": "D1 rejected UPDATE of an MCP lifecycle event with SQLITE_CONSTRAINT_TRIGGER" }
+  ],
+  "securityEvidence": [
+    "Unauthenticated lifecycle mutation returned HTTP 401.",
+    "Registration options exposed only id, label and transport; no URL or secret reference was returned.",
+    "Connected registry response contained no bearer header, authorization value, secret reference, personal-access-token name or internal gateway URL.",
+    "A tool is read-only only when the MCP server provides readOnlyHint=true and does not mark it destructive; unknown or deceptively named unannotated tools default to external/approval-required.",
+    "Recursive metadata sanitization removes the configured credential and generic credential patterns from capabilities, descriptions and input schemas before persistence or API output.",
+    "Only 26 explicitly annotated read tools are eligible for agent runtime exposure; 18 side-effect tools remain approval-labelled and fail closed until P3-T2 adds invocation-time policy enforcement.",
+    "Revocation disabled the server immediately and required explicit re-registration before another connect."
+  ],
+  "knownLimits": [
+    "Per-workspace and per-agent policy plus invocation-time revocation enforcement belongs to P3-T2; all side-effect tools remain unavailable meanwhile.",
+    "The Docker MCP Gateway image remains a floating latest tag until P6-T1 pins and scans production images.",
+    "Lifecycle mutation authentication is a server-side administrator token until the operator identity work is completed."
+  ]
+}

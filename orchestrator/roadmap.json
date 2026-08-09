@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-03",
+  "policy": {
+    "maxParallelTasks": 2,
+    "defaultLeaseMinutes": 45,
+    "requireIndependentReview": true,
+    "publicationRequiresHumanApproval": true,
+    "modelOutputIsUntrusted": true
+  },
+  "workers": {
+    "codex": {
+      "label": "Codex primary orchestrator",
+      "model": "gpt-5",
+      "capabilities": ["architecture", "typescript", "backend", "security", "docker", "testing", "documentation", "review", "frontend", "ux", "accessibility"],
+      "maxConcurrentTasks": 1,
+      "note": "Primary Codex session; may independently review worker evidence but does not bypass human publication approval."
+    },
+    "terra": {
+      "label": "Terra",
+      "model": "gpt-5.6-terra",
+      "capabilities": ["architecture", "typescript", "backend", "security", "docker", "testing", "documentation", "review"],
+      "maxConcurrentTasks": 1
+    },
+    "luna": {
+      "label": "Luna",
+      "model": "configurable",
+      "capabilities": ["frontend", "backend", "ux", "testing", "documentation", "review", "accessibility", "security"],
+      "maxConcurrentTasks": 1,
+      "note": "Worker profile only. Bind this to a verified provider model before dispatch."
+    }
+  },
+  "phases": [
+    {
+      "id": "P1",
+      "title": "Unified coding-agent contract",
+      "goal": "Make every enabled framework produce the same safe proposal, execution and telemetry contract.",
+      "exitCriteria": ["All enabled engines pass contract tests", "No engine mutates the workspace without approval", "Failures are explicit and never simulated"],
+      "tasks": [
+        {
+          "id": "P1-T0",
+          "title": "Audit harness and comparison UX gaps",
+          "objective": "Inventory the current eight-engine behavior, UI states and evidence gaps without changing runtime contracts.",
+          "priority": 99,
+          "dependsOn": [],
+          "preferredWorkers": ["luna"],
+          "requiredCapabilities": ["frontend", "ux", "accessibility", "testing"],
+          "scope": ["app/portal", "app/api", "agent-harnesses", "tests", "orchestrator"],
+          "deliverables": ["Evidence-backed gap matrix", "User-flow inventory", "Contract input for P1-T1 and P1-T4"],
+          "acceptance": ["Every claim links to a current code path or live test", "Mock/configured/ready behavior is distinguished", "No production behavior is changed"],
+          "requiredChecks": ["npm run typecheck", "npm run lint"],
+          "risk": "low"
+        },
+        {
+          "id": "P1-T1",
+          "title": "Freeze Agent Contract v2",
+          "objective": "Define versioned schemas for messages, artifacts, execution batches, tool events, telemetry and errors.",
+          "priority": 100,
+          "dependsOn": [],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["architecture", "typescript", "security"],
+          "scope": ["lib", "app/api", "agent-harnesses", "langgraph-agent"],
+          "deliverables": ["Versioned contract", "Validation boundary", "Migration note"],
+          "acceptance": ["Malformed model output fails closed", "Contract supports multiple files and multiple bounded commands", "Approval payload covers the complete mutation"],
+          "requiredChecks": ["npm run typecheck", "npm test"],
+          "risk": "high"
+        },
+        {
+          "id": "P1-T2",
+          "title": "Build shared tool adapter",
+          "objective": "Expose filesystem, terminal, Git and read-only MCP through one normalized adapter without granting authorization to the model.",
+          "priority": 95,
+          "dependsOn": ["P1-T1"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["backend", "security", "testing"],
+          "scope": ["lib", "companion", "app/api"],
+          "deliverables": ["Tool adapter", "Policy mapping", "Tool telemetry"],
+          "acceptance": ["Every mutation requires a payload-bound approval", "Tool errors share one shape", "Secrets never enter model context"],
+          "requiredChecks": ["npm run typecheck", "npm test"],
+          "risk": "high"
+        },
+        {
+          "id": "P1-T3",
+          "title": "Upgrade six external harnesses",
+          "objective": "Replace read-only benchmark adapters with full proposal-producing coding-agent adapters.",
+          "priority": 90,
+          "dependsOn": ["P1-T1", "P1-T2"],
+          "preferredWorkers": ["terra", "luna"],
+          "requiredCapabilities": ["backend", "testing"],
+          "scope": ["agent-harnesses", "compose.harnesses.yaml"],
+          "deliverables": ["Six contract adapters", "Health/readiness checks", "Comparable telemetry"],
+          "acceptance": ["Each ready engine proposes a file and command", "Approval applies and runs the proposal", "Provider-unavailable paths fail explicitly"],
+          "requiredChecks": ["docker compose -f compose.yaml -f compose.harnesses.yaml config", "npm run benchmark:agents"],
+          "risk": "high"
+        },
+        {
+          "id": "P1-T4",
+          "title": "Coding-agent comparison UI",
+          "objective": "Show proposal, tool trace, tokens, latency, execution evidence and contract failures consistently for every engine.",
+          "priority": 80,
+          "dependsOn": ["P1-T0", "P1-T1"],
+          "preferredWorkers": ["luna"],
+          "requiredCapabilities": ["frontend", "ux", "accessibility", "testing"],
+          "scope": ["app/portal", "app/api"],
+          "deliverables": ["Comparison UI", "Accessible states", "Failure diagnostics"],
+          "acceptance": ["Only ready engines appear", "Metrics identify their source", "Approval and execution results remain visible"],
+          "requiredChecks": ["npm run typecheck", "npm run lint", "npm run test:e2e"],
+          "risk": "medium"
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "title": "Reliable multi-agent execution",
+      "goal": "Coordinate planner, implementer, tester and reviewer in isolated worktrees with durable recovery.",
+      "exitCriteria": ["Concurrent agents cannot overwrite one another", "Interrupted runs resume from checkpoints", "Merge remains human-controlled"],
+      "tasks": [
+        {
+          "id": "P2-T1",
+          "title": "Task state machine and durable queue",
+          "objective": "Persist task dependencies, leases, retries, cancellation, checkpoints and idempotency.",
+          "priority": 75,
+          "dependsOn": ["P1-T1"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["backend", "architecture", "testing"],
+          "scope": ["db", "app/api", "lib"],
+          "deliverables": ["Durable task schema", "Queue API", "Recovery tests"],
+          "acceptance": ["Duplicate delivery is idempotent", "Expired leases are recoverable", "Workspace and task isolation are enforced"],
+          "requiredChecks": ["npm run db:generate", "npm test"],
+          "risk": "high"
+        },
+        {
+          "id": "P2-T2",
+          "title": "Per-task worktree isolation",
+          "objective": "Create a dedicated branch, Git worktree and bounded execution environment for every mutating task.",
+          "priority": 74,
+          "dependsOn": ["P2-T1", "P1-T2"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["backend", "docker", "security"],
+          "scope": ["companion", "compose.yaml"],
+          "deliverables": ["Worktree lifecycle", "Cleanup/recovery", "Collision tests"],
+          "acceptance": ["Tasks cannot mutate another task worktree", "Paths stay inside the selected repository", "Cleanup preserves evidence"],
+          "requiredChecks": ["npm test", "docker compose config"],
+          "risk": "high"
+        },
+        {
+          "id": "P2-T3",
+          "title": "Role handoff and review workflow",
+          "objective": "Implement planner-to-implementer-to-tester-to-reviewer handoffs with bounded context and independent review.",
+          "priority": 70,
+          "dependsOn": ["P2-T1", "P2-T2"],
+          "preferredWorkers": ["luna", "terra"],
+          "requiredCapabilities": ["architecture", "review", "testing"],
+          "scope": ["lib", "app/api", "app/portal"],
+          "deliverables": ["Handoff envelope", "Reviewer gate", "Conflict workflow"],
+          "acceptance": ["Reviewer cannot silently alter submitted evidence", "Same worker cannot self-approve", "Human controls merge/publication"],
+          "requiredChecks": ["npm test", "npm run test:e2e"],
+          "risk": "high"
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "title": "MCP control center",
+      "goal": "Make MCP discovery and permissions observable, scoped and revocable.",
+      "exitCriteria": ["Operators can manage MCP servers from one UI", "Tool access is least-privilege and audited"],
+      "tasks": [
+        {
+          "id": "P3-T1",
+          "title": "MCP registry and lifecycle",
+          "objective": "Add server registration, health, connect, disconnect and capability discovery.",
+          "priority": 60,
+          "dependsOn": ["P1-T2"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["backend", "security"],
+          "scope": ["lib", "app/api", "compose.mcp.yaml"],
+          "deliverables": ["MCP registry", "Health state", "Revocation"],
+          "acceptance": ["Unavailable servers fail closed", "Tool catalog is provenance-labelled", "Connection secrets remain server-side"],
+          "requiredChecks": ["npm test", "docker compose -f compose.yaml -f compose.mcp.yaml config"],
+          "risk": "high"
+        },
+        {
+          "id": "P3-T2",
+          "title": "MCP permissions UI",
+          "objective": "Expose per-workspace and per-agent allow/deny policy with risk labels and audit history.",
+          "priority": 55,
+          "dependsOn": ["P3-T1"],
+          "preferredWorkers": ["luna"],
+          "requiredCapabilities": ["frontend", "ux", "accessibility", "security"],
+          "scope": ["app/portal", "app/api"],
+          "deliverables": ["Permissions UI", "Risk explanations", "Audit view"],
+          "acceptance": ["Default is deny", "Write and external actions require approval", "Revocation takes effect immediately"],
+          "requiredChecks": ["npm run lint", "npm run test:e2e"],
+          "risk": "medium"
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "title": "Repository-scale context",
+      "goal": "Ground every agent in fresh, relevant and provenance-labelled repository context.",
+      "exitCriteria": ["Large repository questions retrieve relevant sources", "Stale snapshots are rejected or refreshed"],
+      "tasks": [
+        {
+          "id": "P4-T1",
+          "title": "Repository index and retrieval",
+          "objective": "Implement incremental symbol-aware indexing with hybrid retrieval and token budgeting.",
+          "priority": 50,
+          "dependsOn": ["P1-T1"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["backend", "architecture", "testing"],
+          "scope": ["lib", "companion", "db"],
+          "deliverables": ["Indexer", "Hybrid retriever", "Context manifest"],
+          "acceptance": ["Generated files and secrets are excluded", "Every chunk has file and snapshot provenance", "Retrieval quality has repeatable tests"],
+          "requiredChecks": ["npm test", "npm run benchmark:agents"],
+          "risk": "high"
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "title": "GitHub and automation lifecycle",
+      "goal": "Add account-aware GitHub integration and controlled background workflows.",
+      "exitCriteria": ["OAuth/App installation replaces shared PAT dependence", "Automations are cancellable, scoped and audited"],
+      "tasks": [
+        {
+          "id": "P5-T1",
+          "title": "GitHub App and protected publication",
+          "objective": "Implement installation-based authentication, repository selection, checks and protected merge gates.",
+          "priority": 45,
+          "dependsOn": ["P2-T3"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["backend", "security", "testing"],
+          "scope": ["app/api", "lib", "companion"],
+          "deliverables": ["GitHub App flow", "Branch policies", "Webhook verification"],
+          "acceptance": ["Tokens are installation-scoped", "Protected branches cannot be pushed directly", "Webhooks are signature-verified"],
+          "requiredChecks": ["npm test", "npm run test:e2e"],
+          "risk": "high"
+        },
+        {
+          "id": "P5-T2",
+          "title": "Automations and reusable profiles",
+          "objective": "Add queued prompts, schedules, hooks, commands and versioned agent/skill profiles.",
+          "priority": 40,
+          "dependsOn": ["P2-T1", "P3-T1"],
+          "preferredWorkers": ["luna", "terra"],
+          "requiredCapabilities": ["backend", "frontend", "ux"],
+          "scope": ["app", "lib", "db"],
+          "deliverables": ["Automation scheduler", "Profile editor", "Run history"],
+          "acceptance": ["Each automation has an owner and scope", "Mutations still require configured approval", "Runs can be cancelled and replayed safely"],
+          "requiredChecks": ["npm test", "npm run test:e2e"],
+          "risk": "high"
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "title": "Production packaging and operations",
+      "goal": "Ship reproducible images that another operator can configure, observe, upgrade and recover.",
+      "exitCriteria": ["Fresh-machine Compose smoke test passes", "No secret exists in image layers", "Upgrade and restore are documented and tested"],
+      "tasks": [
+        {
+          "id": "P6-T1",
+          "title": "Production images and profiles",
+          "objective": "Create versioned minimal, full and benchmark Compose profiles with pinned dependencies and SBOMs.",
+          "priority": 35,
+          "dependsOn": ["P1-T3", "P3-T1"],
+          "preferredWorkers": ["terra"],
+          "requiredCapabilities": ["docker", "security", "testing", "documentation"],
+          "scope": ["Dockerfile", "compose*.yaml", ".github"],
+          "deliverables": ["Versioned images", "Compose profiles", "SBOM and vulnerability report"],
+          "acceptance": ["Images run as non-root", "Secrets are runtime-only", "Fresh-machine smoke test is automated"],
+          "requiredChecks": ["docker compose config", "docker compose build", "npm test"],
+          "risk": "high"
+        },
+        {
+          "id": "P6-T2",
+          "title": "Operations, recovery and release gate",
+          "objective": "Add metrics, traces, backups, migrations, restore drills, quotas and release evidence.",
+          "priority": 30,
+          "dependsOn": ["P6-T1", "P2-T1"],
+          "preferredWorkers": ["terra", "luna"],
+          "requiredCapabilities": ["backend", "testing", "documentation", "security"],
+          "scope": ["app", "db", "compose*.yaml", "docs"],
+          "deliverables": ["Runbooks", "Backup/restore", "Release checklist"],
+          "acceptance": ["Recovery objective is measured", "Release claims link to live evidence", "Rollback is tested"],
+          "requiredChecks": ["npm test", "docker compose config"],
+          "risk": "high"
+        }
+      ]
+    }
+  ]
+}

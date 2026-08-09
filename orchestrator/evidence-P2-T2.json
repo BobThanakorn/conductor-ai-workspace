@@ -1,0 +1,33 @@
+{
+  "summary": "Implemented per-task Git worktree isolation for Contract v2 mutations. Each task gets a deterministic branch and checkout inside the selected repository; approval-gated filesystem, terminal, Git and GitHub mutations resolve against that task root. Existing workspace edits are seeded into a new or retrying worktree with bounded size and generated/secret paths excluded. Release refuses dirty worktrees unless forced, and forced cleanup captures status, a binary patch and bounded untracked files under ignored evidence storage. Recovery marks missing checkouts orphaned without deleting branch or evidence metadata.",
+  "files": [
+    { "path": "companion/worktree-manager.ts", "change": "added", "purpose": "Bounded worktree lifecycle, per-repository locking, workspace seeding, recovery and evidence-preserving release" },
+    { "path": "companion/worktree-manager.test.ts", "change": "added", "purpose": "Isolation, concurrency, seed, collision, dirty-release and resume coverage" },
+    { "path": "companion/worktree-http.test.ts", "change": "added", "purpose": "HTTP-level missing/invalid approval rejection and approved lifecycle route coverage" },
+    { "path": "companion/local-git-server.ts", "change": "modified", "purpose": "Resolve task-bound mutation roots, expose approval-gated worktree lifecycle routes and recover on workspace selection" },
+    { "path": "companion/execution-plane.ts", "change": "modified", "purpose": "Keep internal worktree metadata out of workspace listings and retrieval" },
+    { "path": "companion/README.md", "change": "modified", "purpose": "Document task worktree, approval-root and evidence lifecycle" },
+    { "path": ".gitignore", "change": "modified", "purpose": "Exclude local worktree metadata and evidence" }
+  ],
+  "checks": [
+    { "command": "npx tsx --test companion/worktree-manager.test.ts", "exitCode": 0, "summary": "3 worktree lifecycle and isolation tests passed" },
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed" },
+    { "command": "npm run lint", "exitCode": 0, "summary": "ESLint passed with no warnings" },
+    { "command": "npm test", "exitCode": 0, "summary": "Build plus 67 application tests and 15 companion tests passed; one opt-in live harness test skipped" },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "All 6 portal live tests passed, including Contract v2 apply/run and prose command recovery through task worktrees" },
+    { "command": "docker compose config", "exitCode": 0, "summary": "Compose configuration validated" },
+    { "command": "docker compose -f compose.yaml -f compose.harnesses.yaml up -d --build --force-recreate companion companion-langgraph", "exitCode": 0, "summary": "Runtime images rebuilt and both companions started healthy" },
+    { "command": "npx tsx --test companion/worktree-http.test.ts", "exitCode": 0, "summary": "HTTP lifecycle routes rejected missing/invalid approvals and accepted only payload-bound approved prepare/release" },
+    { "command": "npx tsx --test companion/worktree-manager.test.ts", "exitCode": 0, "summary": "4 worktree tests passed, including symlinked metadata ancestor rejection" },
+    { "command": "POST /approvals/request, POST /approvals/approve, POST /fs/write, POST /worktrees/release", "exitCode": 0, "summary": "Live container smoke wrote a task-bound file inside the isolated worktree and released it with evidencePath preserved" }
+  ],
+  "risks": [
+    "Mutations without contractMutation.taskId intentionally retain the selected repository root for backward compatibility; new agent proposals should always include a task binding.",
+    "Worktree branches remain local until a later human-controlled merge or publication workflow.",
+    "Forced cleanup stores evidence under ignored local storage; operators should back up that directory if evidence retention is required across workspace deletion."
+  ],
+  "followUps": [
+    "P2-T3 should connect durable queue leases and role handoffs to prepare/release, then expose task worktree status in the portal.",
+    "P3-T1 should route MCP server lifecycle operations through the same task and approval root policy."
+  ]
+}

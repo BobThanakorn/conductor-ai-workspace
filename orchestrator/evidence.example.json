@@ -1,0 +1,24 @@
+{
+  "summary": "Implemented the bounded task and preserved unrelated workspace changes.",
+  "files": [
+    {
+      "path": "path/to/changed-file.ts",
+      "change": "modified",
+      "purpose": "Describe why this file changed"
+    }
+  ],
+  "checks": [
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "summary": "TypeScript validation passed"
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "summary": "All relevant tests passed"
+    }
+  ],
+  "risks": [],
+  "followUps": []
+}

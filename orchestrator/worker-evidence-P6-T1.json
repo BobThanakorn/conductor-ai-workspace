@@ -1,0 +1,94 @@
+{
+  "taskId": "P6-T1",
+  "workerId": "terra",
+  "status": "ready_for_independent_review",
+  "summary": "Versioned minimal, full, and benchmark packaging is reproducible, non-root, runtime-secret-only, fresh-machine tested, and backed by current fail-closed SPDX/SARIF evidence for all nine images.",
+  "changedFiles": [
+    "Dockerfile",
+    "Dockerfile.mcp-gateway",
+    "agent-harnesses/common/Dockerfile",
+    "langgraph-agent/Dockerfile",
+    "compose.yaml",
+    "compose.mcp.yaml",
+    "compose.harnesses.yaml",
+    ".dockerignore",
+    "agent-harnesses/requirements/pydanticai.lock",
+    "agent-harnesses/requirements/microsoft-agent-framework.lock",
+    "agent-harnesses/requirements/crewai.lock",
+    "agent-harnesses/requirements/llamaindex.lock",
+    "agent-harnesses/requirements/haystack.lock",
+    "agent-harnesses/requirements/semantic-kernel.lock",
+    "langgraph-agent/requirements.lock",
+    "scripts/fresh-machine-smoke.ps1",
+    "scripts/container-evidence.ps1",
+    "scripts/source-digest.mjs",
+    "docs/production-images.md",
+    ".github/workflows/container-evidence.yml",
+    "orchestrator/worker-evidence-P6-T1.json"
+  ],
+  "files": [
+    "Dockerfile",
+    "Dockerfile.mcp-gateway",
+    "agent-harnesses/common/Dockerfile",
+    "langgraph-agent/Dockerfile",
+    "compose.yaml",
+    "compose.mcp.yaml",
+    "compose.harnesses.yaml",
+    ".dockerignore",
+    "agent-harnesses/requirements/pydanticai.lock",
+    "agent-harnesses/requirements/microsoft-agent-framework.lock",
+    "agent-harnesses/requirements/crewai.lock",
+    "agent-harnesses/requirements/llamaindex.lock",
+    "agent-harnesses/requirements/haystack.lock",
+    "agent-harnesses/requirements/semantic-kernel.lock",
+    "langgraph-agent/requirements.lock",
+    "scripts/fresh-machine-smoke.ps1",
+    "scripts/container-evidence.ps1",
+    "scripts/source-digest.mjs",
+    "docs/production-images.md",
+    ".github/workflows/container-evidence.yml"
+  ],
+  "scopeExpansion": "The delivery necessarily includes lockfiles, smoke/evidence scripts, and operator documentation in agent-harnesses, langgraph-agent, scripts, and docs. These files directly implement the pinned-dependency, SBOM, fresh-machine, and documentation acceptance criteria; unrelated user changes were preserved.",
+  "acceptanceEvidence": {
+    "versionedPinnedImages": "All images have release tags. Node, Python, and MCP Gateway bases use immutable digests. The rebuilt root image uses Debian snapshot 20260701T000000Z and live dpkg-query confirms ca-certificates=20230311+deb12u1, git=1:2.39.5-0+deb12u3, and python3=3.11.2-1+b1. All seven Python dependency graphs are complete transitive lockfiles with hashes and Docker builds use pip --require-hashes.",
+    "profiles": "Compose validation passed for minimal (4 services), full (5 services), and benchmark (11 services). A complete benchmark-profile build finished with exit 0 after the final source state.",
+    "nonRootAndSecrets": "The current nine image IDs inspect as web=node and every other image=65532:65532. The build context excludes environment, secret, artifact, workspace, and cache paths. The aggregate gate scans non-truncated histories for secret markers and rejects root/default users.",
+    "freshMachine": "The isolated project conductor-fresh-8f216da496e4 passed in 31.7 seconds against the rebuilt versioned web image: all four minimal services became healthy and non-root, /portal returned 200, /api/models honestly returned agent_provider_unconfigured with zero ready providers, and teardown removed the project's containers, volumes, and networks.",
+    "sbomAndVulnerabilities": "artifacts/container-evidence/summary.json has complete=true and nine passed entries. Every entry has a current matching image ID plus parseable, non-empty inspect, history, SPDX SBOM, and SARIF vulnerability artifacts. The web entry binds image sha256:a706c4dbb368d6378039f42cca1e67ab72ed69ecd57bb73ccfc10a93dca75e95 to reviewed source digest 4c81cc603c6eea8b2eb096566dbe6b9e480f2e9dd8eb727492a551a2b312339b; aggregate-only recomputes and enforces this binding. Per-image unique Docker Scout cache directories prevent cross-scan contention; aggregate-only validation fails closed for stale or missing evidence.",
+    "ciSupplyChain": "The CI workflow pins checkout, setup-buildx, and upload-artifact to immutable commit SHAs, fails when evidence files are missing, and executes the same fail-closed scan and fresh-machine smoke gates."
+  },
+  "checks": [
+    {
+      "command": "docker compose config",
+      "exitCode": 0,
+      "summary": "The required base check passed. Separate minimal, full, and benchmark --profile config --quiet checks also passed with 4, 5, and 11 services respectively."
+    },
+    {
+      "command": "docker compose build",
+      "exitCode": 0,
+      "summary": "The required base command exited 0. The benchmark-profile build exited 0 for all 11 services and nine targets, then conductor-ai-workspace:0.1.0 was explicitly rebuilt from the final Dockerfile. Live history and package inspection prove the immutable apt snapshot/pins; the stored source digest matches the current checkout."
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "summary": "Production build passed; 117 application tests passed, 0 failed, 1 opt-in live harness test skipped; companion tests passed 18/18."
+    },
+    {
+      "command": "npm run typecheck; npm run lint",
+      "exitCode": 0,
+      "summary": "TypeScript and ESLint gates passed."
+    },
+    {
+      "command": "pwsh -NoProfile -File scripts/container-evidence.ps1 -AggregateOnly",
+      "exitCode": 0,
+      "summary": "All nine current image IDs passed non-root, secret-history, JSON parse, SPDX, and SARIF completeness checks."
+    },
+    {
+      "command": "pwsh -NoProfile -File scripts/fresh-machine-smoke.ps1 -SkipBuild -TimeoutSeconds 180",
+      "exitCode": 0,
+      "summary": "A unique clean Compose project passed and its finally teardown removed every project resource."
+    }
+  ],
+  "externalToolBlockers": [],
+  "publication": "No commit, push, image publication, signing, deployment, provider call, or secret rotation was performed."
+}

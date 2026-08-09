@@ -1,7 +1,9 @@
 name: conductor
 
 x-conductor-image: &conductor-image
-  image: ${CONDUCTOR_IMAGE:-conductor-ai-workspace:local}
+  # 0.1.0 is the local reproducible image version; operators may override the
+  # complete image reference without changing any secret configuration.
+  image: ${CONDUCTOR_IMAGE:-conductor-ai-workspace:0.1.0}
   build:
     context: .
     dockerfile: Dockerfile
@@ -11,6 +13,7 @@ services:
     <<: *conductor-image
     command: ["npm", "run", "start:container"]
     init: true
+    profiles: ["minimal", "full", "benchmark"]
     ports:
       - "127.0.0.1:${CONDUCTOR_WEB_PORT:-3000}:3000"
     environment:
@@ -29,6 +32,12 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
       LANGGRAPH_AGENT_URL: http://agent-langgraph:8010
       LANGGRAPH_INTERNAL_TOKEN: ${LANGGRAPH_INTERNAL_TOKEN:-}
+      CONDUCTOR_HANDOFF_SIGNING_SECRET: ${CONDUCTOR_HANDOFF_SIGNING_SECRET:-}
+      CONDUCTOR_AGENT_QUOTA_PER_MINUTE: ${CONDUCTOR_AGENT_QUOTA_PER_MINUTE:-60}
+      CONDUCTOR_AUTOMATION_QUOTA_PER_MINUTE: ${CONDUCTOR_AUTOMATION_QUOTA_PER_MINUTE:-30}
+      CONDUCTOR_TRUST_PLATFORM_IDENTITY: ${CONDUCTOR_TRUST_PLATFORM_IDENTITY:-false}
+      CONDUCTOR_AUTOMATION_SCHEDULER_SECRET: ${CONDUCTOR_AUTOMATION_SCHEDULER_SECRET:-}
+      CONDUCTOR_AUTOMATION_WEBHOOK_SECRET: ${CONDUCTOR_AUTOMATION_WEBHOOK_SECRET:-}
     secrets:
       - openai-api-key
       - azure-api-key
@@ -41,6 +50,9 @@ services:
         condition: service_healthy
       agent-langgraph:
         condition: service_healthy
+    networks:
+      - default
+      - companion-private
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -53,6 +65,7 @@ services:
     <<: *conductor-image
     command: ["npm", "run", "companion:git"]
     init: true
+    profiles: ["minimal", "full", "benchmark"]
     ports:
       - "127.0.0.1:${CONDUCTOR_COMPANION_PORT:-8765}:8765"
     environment:
@@ -64,17 +77,13 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /workspace
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-      GIT_HTTP_USERNAME: ${GIT_HTTP_USERNAME:-x-access-token}
-      GIT_ASKPASS: /usr/local/bin/conductor-git-askpass
       GIT_TERMINAL_PROMPT: "0"
     volumes:
       - type: bind
         source: ${WORKSPACE_PATH:-.}
         target: /workspace
-    secrets:
-      - github-token
+    networks:
+      - companion-private
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -93,6 +102,7 @@ services:
     <<: *conductor-image
     command: ["npm", "run", "companion:git"]
     init: true
+    profiles: ["minimal", "full", "benchmark"]
     ports:
       - "127.0.0.1:${CONDUCTOR_LANGGRAPH_COMPANION_PORT:-8766}:8765"
     environment:
@@ -104,17 +114,13 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /workspace
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-      GIT_HTTP_USERNAME: ${GIT_HTTP_USERNAME:-x-access-token}
-      GIT_ASKPASS: /usr/local/bin/conductor-git-askpass
       GIT_TERMINAL_PROMPT: "0"
     volumes:
       - type: bind
         source: ${WORKSPACE_PATH:-.}
         target: /workspace
-    secrets:
-      - github-token
+    networks:
+      - companion-private
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -133,8 +139,9 @@ services:
     build:
       context: ./langgraph-agent
       dockerfile: Dockerfile
-    image: ${CONDUCTOR_LANGGRAPH_IMAGE:-conductor-langgraph-agent:local}
+    image: ${CONDUCTOR_LANGGRAPH_IMAGE:-conductor-langgraph-agent:0.1.0}
     init: true
+    profiles: ["minimal", "full", "benchmark"]
     environment:
       AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-https://ai-environment-resource.services.ai.azure.com}
       AZURE_AI_FOUNDRY_API_KEY: ${AZURE_AI_FOUNDRY_API_KEY:-}
@@ -166,10 +173,12 @@ volumes:
   conductor-data:
   langgraph-data:
 
+networks:
+  companion-private:
+    internal: true
+
 secrets:
   openai-api-key:
     file: ${OPENAI_API_KEY_FILE:-./secret.openai-api-key}
   azure-api-key:
     file: ${AZURE_AI_FOUNDRY_API_KEY_FILE:-./secret.azure-api-key}
-  github-token:
-    file: ${GITHUB_TOKEN_FILE:-./secret.github-token}

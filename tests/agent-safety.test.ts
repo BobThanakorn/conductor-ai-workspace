@@ -6,7 +6,10 @@ import {
   assessAgentProposal,
   formatUntrustedUserRequest,
   formatUntrustedWorkspaceFiles,
+  recoverExplicitArtifact,
+  recoverExplicitCommandBatch,
   pythonWorkspaceFilesSchema,
+  redactSensitiveText,
 } from "../lib/agent-safety.ts";
 
 const readOnlyProposal = {
@@ -101,6 +104,24 @@ test("accepts an empty optional execution batch from structured providers", () =
   assert.deepEqual(parsed.executions, []);
 });
 
+test("recovers only explicit file drafts and bounded commands for prose providers", () => {
+  const message = [
+    "สร้างไฟล์ work/probe.txt โดยมีข้อความ harness probe",
+    "python3 -c \"print(1)\"",
+  ].join("\n");
+  assert.deepEqual(recoverExplicitArtifact(message), [{
+    path: "work/probe.txt",
+    content: "harness probe",
+    language: "text",
+  }]);
+  assert.deepEqual(recoverExplicitCommandBatch(message), [{
+    command: "python3 -c \"print(1)\"",
+    args: [],
+    timeoutMs: 120_000,
+  }]);
+  assert.deepEqual(recoverExplicitArtifact("สร้างไฟล์ probe.txt แล้วตรวจสอบสถานะ"), []);
+});
+
 test("accepts detailed implementation plans for complex coding tasks", () => {
   const proposal = agentProposalSchema.parse({
     summary: "Prepare a multi-step Python project proposal.",
@@ -124,6 +145,14 @@ test("strictly rejects absolute, traversal, and Windows paths", () => {
         artifacts: [{ path, content: "print('unsafe')\n", language: "python" }],
       }), path);
   }
+});
+
+test("rejects secret-bearing workspace and artifact paths", () => {
+  assert.throws(() => pythonWorkspaceFilesSchema.parse([{ path: ".env.local", content: "TOKEN=secret" }]), /secret-bearing/);
+  assert.throws(() => agentProposalSchema.parse({
+    ...readOnlyProposal,
+    artifacts: [{ path: "certs/private.pem", content: "private", language: "text" }],
+  }), /secret-bearing/);
 });
 
 test("accepts complete drafts for multiple programming languages", () => {
@@ -183,4 +212,12 @@ test("bounds combined proposed artifact content", () => {
         language: "python",
       })),
     }), /combined artifact content/i);
+});
+
+test("redacts credential-shaped workspace evidence before model context", () => {
+  const redacted = redactSensitiveText("AZURE_API_KEY=super-secret-value token=abc123");
+  assert.doesNotMatch(redacted, /super-secret-value|abc123/);
+  assert.match(redacted, /redacted-secret/);
+  assert.doesNotMatch(redactSensitiveText("Authorization: Bearer very-long-secret-token-value"), /very-long-secret-token-value/);
+  assert.doesNotMatch(formatUntrustedUserRequest("Use Authorization: Bearer very-long-secret-token-value"), /very-long-secret-token-value/);
 });

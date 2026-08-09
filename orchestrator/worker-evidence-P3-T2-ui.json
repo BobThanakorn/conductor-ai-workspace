@@ -1,0 +1,47 @@
+{
+  "taskId": "P3-T2",
+  "workerId": "luna-ui",
+  "status": "ready_for_integration_review",
+  "scope": "Portal and UX half of the MCP permissions control center",
+  "changedFiles": [
+    "app/portal/mcp-permissions-panel.tsx",
+    "app/portal/mcp-permissions.module.css",
+    "app/portal/page.tsx",
+    "tests/portal-live.spec.ts",
+    "orchestrator/worker-evidence-P3-T2-ui.json"
+  ],
+  "acceptanceEvidence": {
+    "realApiOnly": [
+      "GET /api/mcp",
+      "POST /api/mcp",
+      "GET /api/mcp/policies",
+      "POST /api/mcp/policies"
+    ],
+    "defaultDeny": "The UI renders the server-derived effective decision and explains default deny; no local allow fallback exists.",
+    "leastPrivilege": "Workspace policy is the ceiling; agent allow is disabled when workspace is not explicitly allowed.",
+    "sideEffectApproval": "Write, execute, and external tools always display Approval required from immutable server-classified metadata.",
+    "provenance": "Each discovered tool displays MCP server ID and streamable-http provenance.",
+    "audit": "Registry and policy events are rendered as append-only history without secrets or tool arguments.",
+    "tokenHandling": "Administrator token uses a password input and React component memory only; it is not written to storage, URLs, Agent context, or telemetry.",
+    "accessibility": "Tabs expose tab semantics, roving tabIndex, Home/End/Arrow navigation, labelled form controls, focus rings, status and alert live regions, and responsive layouts.",
+    "conflictHandling": "HTTP 409 policy revision errors remain fail-closed and are shown in the alert region."
+  },
+  "checks": [
+    {
+      "command": "npx eslint app/portal/page.tsx app/portal/mcp-permissions-panel.tsx tests/portal-live.spec.ts",
+      "exitCode": 0
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 1,
+      "scopeResult": "No reported error was in the P3-T2 UI files.",
+      "deferredReason": "Concurrent P5-T1 edits were incomplete in app/api/github/webhook/route.ts, lib/github-app.ts, and tests/github-app.test.ts."
+    },
+    {
+      "command": "npm run test:e2e",
+      "status": "deferred_to_integrated_review",
+      "deferredReason": "The running container does not yet contain the concurrent P3-T2 backend and UI changes; Codex will rebuild and run the integrated suite after workers stabilize."
+    }
+  ],
+  "publication": "No commit, push, merge, deployment, secret change, or external publication was performed."
+}

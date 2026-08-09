@@ -1,0 +1,15 @@
+{
+  "summary": "Added Agent Contract v2 with shared validation, complete mutation approval payloads, workspace snapshot binding, and compatibility with existing proposal persistence.",
+  "files": [
+    { "path": "lib/agent-contract.ts", "change": "added", "purpose": "Versioned contract and mutation/approval schemas" },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Validate and expose Contract v2 at the agent boundary" },
+    { "path": "lib/environment-store.ts", "change": "modified", "purpose": "Hash and persist the complete Contract v2 approval payload" },
+    { "path": "tests/agent-contract.test.ts", "change": "added", "purpose": "Contract validation and approval binding tests" }
+  ],
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed" },
+    { "command": "npm test", "exitCode": 0, "summary": "Build plus 39 application/contract tests and 10 companion tests passed" }
+  ],
+  "risks": ["The existing Python LangGraph service keeps its legacy wire schema; the TypeScript boundary now normalizes it into Contract v2."],
+  "followUps": ["P1-T2 should consume the shared mutation/tool adapter and pass the same payload into companion approval." ]
+}

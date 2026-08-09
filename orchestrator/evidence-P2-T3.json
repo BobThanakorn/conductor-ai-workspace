@@ -1,0 +1,32 @@
+{
+  "summary": "Implemented and live-verified a durable planner-to-implementer-to-tester-to-reviewer workflow. Signed identities are audience/workspace/task scoped and use canonical actor IDs; context is snapshot-bound and secret screened; persisted context/evidence is immutable; review is independent; conflicts require a signed human; publication records the human actor and timestamp without performing Git merge or push. The Portal exposes protected inspection and lifecycle controls using short-lived tokens held only in page memory.",
+  "files": [
+    { "path": "lib/handoff-identity.ts", "change": "Added HMAC-signed short-lived identities with canonical actor IDs and audience, workspace and optional task scope." },
+    { "path": "lib/handoff-workflow.ts", "change": "Added bounded context/evidence schemas, expanded secret path/content rejection, immutable digests and case-normalized independent-review checks." },
+    { "path": "lib/handoff-store.ts", "change": "Added snapshot provenance enforcement, verified reads, task-scoped lifecycle authorization, conflict workflow and durable human publication audit." },
+    { "path": "lib/environment-store.ts", "change": "Added durable handoff/review storage, additive publication columns, immutable payload triggers and append-only audit triggers." },
+    { "path": "db/schema.ts", "change": "Added handoff, review and durable publication actor/timestamp schema fields." },
+    { "path": "drizzle/0004_smiling_chat.sql", "change": "Added deployable handoff tables, indexes and immutability/append-only triggers." },
+    { "path": "app/api/handoffs/route.ts", "change": "Added summary-only public metadata, authenticated full evidence and identity-derived lifecycle authorization." },
+    { "path": "app/portal/page.tsx", "change": "Added protected evidence inspection and accept/review/resolve/publish controls using in-memory short-lived identities." },
+    { "path": "app/portal/portal.css", "change": "Added accessible handoff identity, evidence and action states." },
+    { "path": "orchestrator/handoff-token.ts", "change": "Added a bounded CLI for generating short-lived signed worker or human identities without exposing the signing secret." },
+    { "path": "tests/handoff-workflow.test.ts", "change": "Added scope, tamper, secret-content, canonical actor and immutable storage assertions." },
+    { "path": "tests/handoff-live-smoke.ts", "change": "Added a reproducible live D1/API lifecycle smoke with cleanup." },
+    { "path": "tests/portal-live.spec.ts", "change": "Added live assertions for the handoff workflow and protected token input." },
+    { "path": "package.json", "change": "Added handoff token and live-smoke commands." }
+  ],
+  "scopeExpansion": {
+    "reason": "Security and deployability required durable schema, migration, tests and operator token tooling in addition to the declared lib/app scope.",
+    "paths": ["db/schema.ts", "drizzle/0004_smiling_chat.sql", "tests/handoff-workflow.test.ts", "tests/handoff-live-smoke.ts", "tests/portal-live.spec.ts", "orchestrator/handoff-token.ts", "package.json"]
+  },
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "detail": "TypeScript passed after identity, store, route, CLI and Portal changes." },
+    { "command": "npm run lint", "exitCode": 0, "detail": "ESLint passed with no warnings or errors." },
+    { "command": "npm test", "exitCode": 0, "detail": "Build passed; 72 code tests passed with one explicit opt-in harness skip; companion suite passed 15/15." },
+    { "command": "npm run db:generate", "exitCode": 0, "detail": "Generated drizzle/0004_smiling_chat.sql; immutable and append-only triggers were added to the migration." },
+    { "command": "docker compose -f compose.yaml -f compose.harnesses.yaml up -d --build --force-recreate web", "exitCode": 0, "detail": "Rebuilt the current source and recreated the live web runtime with all dependencies healthy." },
+    { "command": "npm run test:handoff-live", "exitCode": 0, "detail": "Live D1/API smoke passed nine gates: summary redaction, authenticated evidence, cross-workspace denial, sequential role chain, self-review denial, digest conflict, independent approval, human-only publication and task-scoped inspection; smoke task was cancelled afterward." },
+    { "command": "npm run test:e2e", "exitCode": 0, "detail": "Playwright live Portal suite passed 6/6, including Project handoff controls and existing Agent/benchmark flows." }
+  ]
+}

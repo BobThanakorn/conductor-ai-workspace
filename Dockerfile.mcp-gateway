@@ -1,0 +1,7 @@
+# Docker MCP Gateway release resolved on 2026-08-09. The upstream image has no
+# version label, so this immutable digest is the production version identifier.
+FROM docker/mcp-gateway@sha256:f5a679a05fc39022a046167bef92aeeb01bcd59485ad27843ae5227db7950688
+USER 65532:65532
+LABEL org.opencontainers.image.title="conductor-mcp-gateway" \
+      org.opencontainers.image.version="2026.08.09" \
+      org.opencontainers.image.base.name="docker/mcp-gateway"

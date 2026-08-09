@@ -1,0 +1,13 @@
+{
+  "summary": "Audited all eight engines and the portal flow against current source paths. External frameworks are native text-answer adapters, not full coding agents; OpenAI and LangGraph are the only structured proposal paths today.",
+  "files": [
+    { "path": "orchestrator/audits/P1-T0-harness-ux-audit.md", "change": "added", "purpose": "Evidence-backed engine truth table and UI flow inventory" },
+    { "path": "orchestrator/roadmap.json", "change": "modified", "purpose": "Declare audit artifact scope" }
+  ],
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed" },
+    { "command": "npm run lint", "exitCode": 0, "summary": "ESLint passed" }
+  ],
+  "risks": ["The audit is source-grounded; external provider readiness still requires live smoke tests."],
+  "followUps": ["P1-T2 shared adapter", "P1-T3 external framework Contract v2 adapters", "P1-T4 readiness labels in the portal"]
+}

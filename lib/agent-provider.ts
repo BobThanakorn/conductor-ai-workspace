@@ -15,8 +15,12 @@ export type AgentEnvironmentBindings = {
   VLLM_MODEL?: string;
   CONDUCTOR_MODEL_OPTIONS?: string;
   MCP_GATEWAY_URL?: string;
+  MCP_GATEWAY_AUTH_TOKEN?: string;
+  MCP_SERVER_ALLOWLIST?: string;
+  MCP_ADMIN_TOKEN?: string;
   LANGGRAPH_AGENT_URL?: string;
   LANGGRAPH_INTERNAL_TOKEN?: string;
+  CONDUCTOR_HANDOFF_SIGNING_SECRET?: string;
   PYDANTIC_AI_AGENT_URL?: string;
   CREWAI_AGENT_URL?: string;
   MICROSOFT_AGENT_FRAMEWORK_URL?: string;

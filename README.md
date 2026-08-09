@@ -13,8 +13,9 @@ proposals before the execution companion changes a real repository.
 - Complete, multi-language file proposals rendered in the editor before apply.
 - Real repository filesystem tree/read/write/delete through the companion.
 - Real terminal execution with stdout, stderr, exit code, timeout, and duration.
-- Git status, diff, commit, fetch, pull, push, branch, checkout, and merge.
-- GitHub pull-request creation through the provider API.
+- Git status, diff, and local commits through the isolated companion.
+- Server-only GitHub App repository selection, verified webhooks, and protected
+  pull-request merge after a signed human permit and fresh policy validation.
 - Payload-bound, short-lived, single-use approval tokens for every mutation.
 - Fail-closed provider and companion behavior: unavailable dependencies produce
   an explicit error and never generate a simulated proposal or repository result.
@@ -51,7 +52,7 @@ docker compose -f compose.yaml -f compose.azure.yaml -f compose.mcp.yaml up --bu
 # Build the isolated external-framework comparison suite
 docker compose -f compose.yaml -f compose.harnesses.yaml up --build
 
-# Add GitHub push and pull-request credentials to the companion
+# Keep the companion free of GitHub credentials (publication is server-only)
 docker compose -f compose.yaml -f compose.azure.yaml -f compose.github.yaml up --build
 ```
 
@@ -139,7 +140,9 @@ curl http://127.0.0.1:8765/health
 ```
 
 The mounted repository remains on the host. Terminal and Git commands execute
-inside the companion container, not directly on the host operating system.
+inside the companion container, not directly on the host operating system. The
+companions use an internal-only Docker network: web-to-companion traffic stays
+available, while companion Internet egress is denied.
 
 ## Share the image
 
@@ -181,9 +184,38 @@ AZURE_AI_FOUNDRY_API_KEY=replace-with-your-key
 AZURE_AI_FOUNDRY_MODEL=gpt-5.1-codex-mini
 ```
 
-`OPENAI_API_KEY` and `OPENAI_MODEL` configure an optional alternate provider. `GITHUB_TOKEN`
-enables GitHub HTTPS authentication and pull-request creation. Never commit
-credential values.
+`OPENAI_API_KEY` and `OPENAI_MODEL` configure an optional alternate provider.
+GitHub publication uses `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
+`GITHUB_WEBHOOK_SECRET`, and `CONDUCTOR_PUBLICATION_SIGNING_SECRET` only in
+the server runtime; the companion never receives an installation token or a
+shared personal-access token. Never commit credential values.
+
+`POST /api/github/publication/merge` requires a signed human identity, a
+five-minute payload-bound permit, and an idempotency key. The permit ID is the
+durable one-time publication scope. If a process fails after GitHub accepts a
+merge but before the durable response is recorded, a stale retry may only
+reconcile the matching closed-and-merged PR; it never falls back to a direct or
+force push.
+
+## Automations and reusable profiles
+
+The Portal **Automations** tab stores owner-scoped, versioned agent and skill
+profiles in D1. An automation pins exact profile versions and supports manual,
+bounded interval, signed webhook, or allowlisted named-command triggers. Every
+trigger materializes a new repository snapshot and durable task. The task may
+produce a proposal, but all file, execution, Git, merge, and publication
+mutations still stop at the normal human approval gate.
+
+Local browser use requires a short-lived signed human token. Generate one with
+`npm run handoff:token -- --actor human:local-operator --role reviewer --kind human --workspace workspace_local`; hosted identity headers are trusted only when
+`CONDUCTOR_TRUST_PLATFORM_IDENTITY=true` is set behind a proxy that strips
+caller-supplied copies. The scheduler calls `POST /api/automations/tick` with an
+HMAC of the exact raw body in `X-Conductor-Scheduler-Signature`. Webhook callers
+use the same raw-body HMAC pattern at `POST /api/automations/webhook` with
+`X-Conductor-Workspace`, `X-Conductor-Hook-Id`, and
+`X-Conductor-Hook-Signature`. Scheduler and webhook keys must be different.
+Run materialization is lease-recoverable and idempotent; cancel withdraws
+pending approvals, while replay always creates a new run and fresh snapshot.
 
 An authenticated OpenAI-compatible vLLM server on a private network can be used
 with:
@@ -216,9 +248,11 @@ Enter a task in the prompt box, for example:
 
 Inspect the complete proposal and select **Approve, apply & run**. With the
 companion connected, the files are written into the mounted repository and the
-verification command runs in the container. The Terminal also accepts explicit
-commands such as `npm test`, `python3 main.py`, `git pull`, and `git push`; every
-run requires a new approval bound to that exact command.
+verification command runs in the container. The Terminal accepts explicit
+bounded non-publication commands such as `npm test`, `python3 main.py`, and
+`git status`;
+every run requires a new approval bound to that exact command. Direct and force
+pushes are retired in favor of the server-side protected GitHub App merge path.
 
 ## Verification
 
@@ -229,6 +263,24 @@ npm test
 docker compose config
 docker compose build
 ```
+
+## Codex development orchestrator
+
+The repository includes a dependency-aware development orchestrator for Codex.
+Codex uses it to sequence implementation, create bounded handoffs for Terra or
+Luna, verify evidence and maintain continuity across sessions. It is not a
+runtime claim that the web app can launch Codex models automatically.
+
+```powershell
+npm run orchestrator:validate
+npm run orchestrator:status
+npm run orchestrator -- next --worker terra
+npm run orchestrator -- next --worker luna
+```
+
+The operational plan and full claim/submit/review workflow are documented in
+[`orchestrator/README.md`](orchestrator/README.md). Roadmap state does not grant
+permission to commit, push, merge, publish, or change secrets.
 
 ## Security boundary
 

@@ -1,0 +1,51 @@
+{
+  "taskId": "P6-T1",
+  "reviewer": "luna",
+  "decision": "approve",
+  "attempt": 4,
+  "reviewedAt": "2026-08-09T16:54:46.3760181Z",
+  "verified": {
+    "rebuiltRootImage": "The live conductor-ai-workspace:0.1.0 tag resolves to sha256:a706c4dbb368d6378039f42cca1e67ab72ed69ecd57bb73ccfc10a93dca75e95, created after the final Dockerfile change and configured as user node. Its no-trunc history contains snapshot.debian.org/archive/debian/20260701T000000Z and the exact ca-certificates, git, and python3 pins.",
+    "installedAptVersions": "An isolated, network-disabled dpkg-query against the live image returned ca-certificates=20230311+deb12u1, git=1:2.39.5-0+deb12u3, and python3=3.11.2-1+b1.",
+    "sourceBinding": "Host node scripts/source-digest.mjs . and image /app/.conductor-source-digest both returned 4c81cc603c6eea8b2eb096566dbe6b9e480f2e9dd8eb727492a551a2b312339b. container-evidence.ps1 recomputes the host digest, reads the image digest with network disabled, rejects mismatches, and independently rejects artifact/current-image ID drift.",
+    "rootArtifacts": "The root inspect and history artifacts contain the current a706c4 image ID. Its SPDX 2.3 artifact is non-empty with 1079 packages and contains the current image ID; its SARIF 2.1.0 artifact is non-empty with one run and 272 results. All were generated after the rebuilt image and summary.json associates them with the same current image ID and source digest.",
+    "aggregate": "AggregateOnly was independently run against a temporary copy of the submitted evidence so repository artifacts were not rewritten. It exited 0 with complete=true and 9/9 current images passed, including the root current image ID and reviewed source digest.",
+    "freshSmokeCleanup": "The submitted fresh smoke records project conductor-fresh-8f216da496e4 passing with four healthy non-root minimal services, HTTP 200 portal, and honest provider-unconfigured behavior. Independent Docker label queries found zero remaining containers, volumes, and networks for that exact project.",
+    "submittedTests": "Submitted evidence records npm test exiting 0 with the production build, 117 passing application tests, zero failures, one opt-in live harness skip, and 18/18 companion tests. Typecheck and lint also passed. These long checks were inspected rather than rerun because this attempt changed only image/evidence provenance and the review mandate prohibited unnecessary rebuilds or scans.",
+    "priorBlockersClosed": "All prior blockers are closed: Haystack and all other SPDX/SARIF artifacts are present; scanner and CI gates fail closed; complete transitive Python locks use hashes and --require-hashes; apt sources and packages are immutable/pinned; the web image is rebuilt from the current Dockerfile; and evidence is bound to the reviewed source digest."
+  },
+  "blockingFindings": [],
+  "checks": [
+    {
+      "command": "docker image inspect/history plus network-disabled dpkg-query for conductor-ai-workspace:0.1.0",
+      "exitCode": 0,
+      "summary": "The current a706c4 image is non-root, contains the immutable Debian snapshot and exact package pins in live history, and has the expected installed versions."
+    },
+    {
+      "command": "node scripts/source-digest.mjs . and network-disabled read of /app/.conductor-source-digest",
+      "exitCode": 0,
+      "summary": "Host and image source digests match exactly at 4c81cc603c6eea8b2eb096566dbe6b9e480f2e9dd8eb727492a551a2b312339b."
+    },
+    {
+      "command": "pwsh -NoProfile -File scripts/container-evidence.ps1 -AggregateOnly against a temporary evidence copy",
+      "exitCode": 0,
+      "summary": "The fail-closed aggregate passed all 9 current images without rewriting the submitted repository artifacts."
+    },
+    {
+      "command": "parse current root inspect/SPDX/SARIF artifacts",
+      "exitCode": 0,
+      "summary": "Inspect binds to a706c4; SPDX 2.3 has 1079 packages; SARIF 2.1.0 has one run and 272 results."
+    },
+    {
+      "command": "docker resource queries for conductor-fresh-8f216da496e4",
+      "exitCode": 0,
+      "summary": "No containers, volumes, or networks remain for the submitted fresh-machine smoke project."
+    },
+    {
+      "command": "inspect submitted npm test evidence",
+      "exitCode": 0,
+      "summary": "The worker evidence records build success, 117 passing application tests with one opt-in skip, and 18/18 passing companion tests."
+    }
+  ],
+  "publication": "No image rebuild/removal, product-source or submitted-artifact edit, provider call, network publication, credential use, commit, push, signing, or deployment was performed by the reviewer. Only this reviewer evidence and the required orchestrator decision were recorded."
+}

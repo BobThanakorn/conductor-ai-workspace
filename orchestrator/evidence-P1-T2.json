@@ -1,0 +1,27 @@
+{
+  "summary": "Added a shared companion/MCP tool adapter that classifies read/write/execute/external risk, binds the complete Contract v2 mutation to the approval request and execution payload, validates that binding inside the companion against artifacts, commands and the current Git snapshot, normalizes tool telemetry and failures, fails closed for mutating MCP names, and redacts secrets before model context or failure telemetry.",
+  "files": [
+    { "path": "lib/agent-tools.ts", "change": "added", "purpose": "Shared tool event schema, risk classifier, approval policy and failure normalization" },
+    { "path": "lib/agent-tool-adapter.ts", "change": "added", "purpose": "Bounded companion filesystem/terminal/Git/GitHub adapter and read-only MCP transport" },
+    { "path": "lib/agent-telemetry.ts", "change": "modified", "purpose": "Carry normalized tool source, risk and approval metadata" },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Normalize tool events from OpenAI, LangGraph and external harnesses at the shared boundary" },
+    { "path": "app/portal/page.tsx", "change": "modified", "purpose": "Use the shared adapter for proposal apply/run and pass the exact Contract v2 mutation" },
+    { "path": "companion/contract-binding.ts", "change": "added", "purpose": "Server-side Contract v2 validation for artifact/command binding and stale snapshot rejection" },
+    { "path": "companion/local-git-server.ts", "change": "modified", "purpose": "Enforce tool policy, validate approval-bound mutations, expose read-only MCP forwarding, and normalize failures" },
+    { "path": "lib/agent-safety.ts", "change": "modified", "purpose": "Redact credential-shaped workspace evidence before model context" },
+    { "path": "lib/external-harness.ts", "change": "modified", "purpose": "Redact workspace evidence sent to external harnesses" },
+    { "path": "lib/langgraph-agent.ts", "change": "modified", "purpose": "Redact workspace evidence sent to LangGraph service" },
+    { "path": "tests/agent-tool-adapter.test.ts", "change": "added", "purpose": "Contract payload binding, read-only MCP gating, and exact approval/execution payload integration" },
+    { "path": "tests/companion-contract-binding.test.ts", "change": "added", "purpose": "Server-side write and execute operation binding regression coverage" },
+    { "path": "tests/portal-live.spec.ts", "change": "modified", "purpose": "Live Contract v2 apply-and-run approval integration coverage" },
+    { "path": "lib/agent-contract.ts", "change": "modified", "purpose": "Bind each approved companion tool to an exact operation input" },
+    { "path": "tests/agent-safety.test.ts", "change": "modified", "purpose": "Credential redaction regression coverage" }
+  ],
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed" },
+    { "command": "npm test", "exitCode": 0, "summary": "Build plus 64 application tests and 10 companion tests passed" },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "Five browser tests passed, including live Contract v2 apply-and-run" }
+  ],
+  "risks": ["MCP calls are intentionally read-only at this adapter boundary; mutating MCP tools remain unavailable until a separate permissioned control-center task exists."],
+  "followUps": ["P1-T3 should make external harnesses emit Contract v2 proposals and native tool events." ]
+}

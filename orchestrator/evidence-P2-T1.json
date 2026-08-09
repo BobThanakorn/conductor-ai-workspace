@@ -1,0 +1,21 @@
+{
+  "summary": "Added durable task leases, persisted dependency edges, bounded retry policy with exponential backoff and max attempts, checkpoints, cancellation/resume compatibility, idempotent queue actions, and a workspace-scoped queue view. Existing D1 installations receive additive migrations, Drizzle schema fields/indexes, strict migration error handling, SQLite-safe lease comparisons, and behavioral queue tests.",
+  "files": [
+    { "path": "lib/api-contract.ts", "change": "modified", "purpose": "Validate claim, heartbeat, and release actions with worker and checkpoint fields" },
+    { "path": "lib/environment-store.ts", "change": "modified", "purpose": "Persist leases, dependency edges, retry backoff/max attempts, checkpoints, queue ordering, and workspace/task-scoped transitions" },
+    { "path": "db/schema.ts", "change": "modified", "purpose": "Declare lease, dependency, and retry columns/indexes for Drizzle" },
+    { "path": "drizzle/0002_empty_falcon.sql", "change": "added", "purpose": "Migrate existing tasks tables with lease/checkpoint fields and index" },
+    { "path": "drizzle/0003_watery_wong.sql", "change": "added", "purpose": "Migrate dependency edges and retry policy fields" },
+    { "path": "app/api/workspace/route.ts", "change": "modified", "purpose": "Expose a bounded workspace-scoped queue view" },
+    { "path": "tests/task-queue-contract.test.ts", "change": "added", "purpose": "Validate queue actions, dependencies, retry policy, lease fields, queue view and workspace isolation source contracts" },
+    { "path": "tests/task-queue-behavior.test.mjs", "change": "modified", "purpose": "Verify dependency blocking, retry backoff, lease recovery and idempotency" }
+  ],
+  "checks": [
+    { "command": "npm run db:generate", "exitCode": 0, "summary": "Drizzle generated migration 0003 for dependencies and retry policy" },
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed" },
+    { "command": "npm run lint", "exitCode": 0, "summary": "ESLint passed" },
+    { "command": "npm test", "exitCode": 0, "summary": "Build plus 64 application tests and 10 companion tests passed, including dependency/retry behavior" }
+  ],
+  "risks": ["D1 migration is additive; production rollout must apply drizzle/0002_empty_falcon.sql before enabling queue claims on an existing database."],
+  "followUps": ["P2-T2 should put each claimed mutating task in its own Git worktree before the lease is used for execution." ]
+}

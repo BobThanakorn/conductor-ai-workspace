@@ -2,6 +2,7 @@ import type { AgentRuntimeConfig } from "@/lib/agent-provider";
 import type { AgentProposal } from "@/lib/agent-safety";
 import type { AgentContext } from "@/lib/environment-store";
 import type { AgentAuditEvent, AgentTokenUsage, AgentToolUse } from "@/lib/agent-telemetry";
+import { redactSensitiveText } from "@/lib/agent-safety";
 
 type LangGraphInput = {
   message: string;
@@ -69,6 +70,11 @@ export async function runLangGraphAgent(args: {
     },
     body: JSON.stringify({
       ...args.input,
+      message: redactSensitiveText(args.input.message),
+      workspaceFiles: args.input.workspaceFiles.map((file) => ({
+        ...file,
+        content: redactSensitiveText(file.content),
+      })),
       model: args.runtime.model,
       task: args.context.task
         ? {

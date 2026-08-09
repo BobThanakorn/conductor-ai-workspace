@@ -1,6 +1,6 @@
 import { z, type ZodError } from "zod";
 
-import { pythonWorkspaceFilesSchema } from "@/lib/agent-safety";
+import { pythonWorkspaceFilesSchema } from "./agent-safety.ts";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -63,6 +63,8 @@ export const workspaceActionSchema = z.discriminatedUnion("action", [
         .max(180)
         .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
         .optional(),
+      dependsOn: z.array(identifierSchema).max(20).default([]),
+      maxAttempts: z.number().int().min(1).max(10).default(3),
     })
     .strict(),
   z
@@ -71,6 +73,16 @@ export const workspaceActionSchema = z.discriminatedUnion("action", [
       action: z.literal("approve"),
       approvalId: identifierSchema,
       note: noteSchema,
+      actor: z.string().trim().min(1).max(80).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...commonActionFields,
+      action: z.literal("fail"),
+      taskId: identifierSchema,
+      reason: z.string().trim().min(1).max(500),
+      retryable: z.boolean().default(true),
       actor: z.string().trim().min(1).max(80).optional(),
     })
     .strict(),
@@ -97,6 +109,37 @@ export const workspaceActionSchema = z.discriminatedUnion("action", [
       ...commonActionFields,
       action: z.literal("resume"),
       taskId: identifierSchema,
+      note: noteSchema,
+      actor: z.string().trim().min(1).max(80).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...commonActionFields,
+      action: z.literal("claim"),
+      taskId: identifierSchema,
+      workerId: identifierSchema,
+      leaseMinutes: z.number().int().min(1).max(240).default(45),
+      actor: z.string().trim().min(1).max(80).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...commonActionFields,
+      action: z.literal("heartbeat"),
+      taskId: identifierSchema,
+      workerId: identifierSchema,
+      leaseMinutes: z.number().int().min(1).max(240).default(45),
+      checkpointId: identifierSchema.optional(),
+      actor: z.string().trim().min(1).max(80).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...commonActionFields,
+      action: z.literal("release"),
+      taskId: identifierSchema,
+      workerId: identifierSchema,
       note: noteSchema,
       actor: z.string().trim().min(1).max(80).optional(),
     })

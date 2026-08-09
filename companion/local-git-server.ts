@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { approveAction, consumeApproval, requestApproval } from "./approval-store";
 import {
@@ -13,6 +14,16 @@ import {
   writeWorkspaceFiles,
 } from "./execution-plane";
 import { normalizeRepositoryRelativePath } from "./workspace-path";
+import { validateContractBoundInput } from "./contract-binding";
+import { invokeReadOnlyMcpTool } from "../lib/agent-tool-adapter";
+import { normalizeAgentToolEvent, normalizeToolFailure, toolRequiresApproval } from "../lib/agent-tools";
+import { buildRepositoryIndex, retrieveRepositoryContext } from "../lib/repository-index";
+import {
+  listTaskWorktrees,
+  prepareTaskWorktree,
+  recoverTaskWorktrees,
+  releaseTaskWorktree,
+} from "./worktree-manager";
 
 const PORT = Number(process.env.CONDUCTOR_COMPANION_PORT ?? 8765);
 const HOST = process.env.CONDUCTOR_COMPANION_HOST ?? "127.0.0.1";
@@ -37,6 +48,7 @@ async function selectWorkspaceRoot(requested: string) {
   if (!metadata.isDirectory()) throw new Error("Repository path is not a directory.");
   await stat(path.join(resolved, ".git"));
   activeRoot = resolved;
+  await recoverTaskWorktrees(activeRoot);
   return activeRoot;
 }
 
@@ -82,15 +94,46 @@ function parseStatus(stdout: string) {
   return stdout.split(/\r?\n/).filter(Boolean).map((line) => ({ code: line.slice(0, 2), path: line.slice(3) }));
 }
 
+function flattenWorkspaceFiles(entries: unknown[], output: string[] = []): string[] {
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const value = entry as Record<string, unknown>;
+    if (value.type === "file" && typeof value.path === "string") output.push(value.path);
+    if (Array.isArray(value.children)) flattenWorkspaceFiles(value.children, output);
+    if (output.length >= 200) break;
+  }
+  return output;
+}
+
 function approvalToken(request: IncomingMessage) {
   const value = request.headers["x-conductor-approval"];
   return Array.isArray(value) ? value[0] : value;
 }
 
+function mutationTaskId(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const body = value as JsonRecord;
+  const mutation = body.contractMutation;
+  if (!mutation || typeof mutation !== "object" || Array.isArray(mutation)) return undefined;
+  const taskId = (mutation as JsonRecord).taskId;
+  return typeof taskId === "string" && taskId.trim() ? taskId.trim() : undefined;
+}
+
+async function mutationRoot(value: unknown) {
+  const taskId = mutationTaskId(value);
+  if (!taskId) return activeRoot;
+  return (await prepareTaskWorktree(activeRoot, taskId)).path;
+}
+
 async function approvedBody(request: IncomingMessage, action: string) {
   const body = await readBody(request);
+  const event = normalizeAgentToolEvent({ name: action, status: "called", source: "companion" });
+  if (!toolRequiresApproval(event)) throw new Error("Mutation route must be approval-gated.");
+  const head = await runGit(activeRoot, ["rev-parse", "HEAD"]);
+  validateContractBoundInput(body, action, head.stdout.trim());
+  const root = await mutationRoot(body);
   consumeApproval(approvalToken(request), action, body);
-  return body;
+  return { body, root };
 }
 
 async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -104,7 +147,6 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
 
     if (request.method === "GET" && url.pathname === "/health") {
       const [top, branch] = await Promise.all([runGit(activeRoot, ["rev-parse", "--show-toplevel"]), runGit(activeRoot, ["branch", "--show-current"])]);
-      const githubConfigured = Boolean(process.env.GITHUB_TOKEN?.trim());
       return send(response, 200, {
         ok: true,
         root: top.stdout.trim(),
@@ -114,10 +156,9 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
           "filesystem",
           "terminal",
           "git-local",
-          "git-remote",
-          ...(githubConfigured ? ["github-repository", "github-pr"] : []),
+          "git-remote-readonly",
         ],
-        integrations: { github: githubConfigured },
+        integrations: { github: false, githubPublication: "server-github-app-only" },
       });
     }
 
@@ -137,36 +178,37 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       });
     }
 
+    if (request.method === "GET" && url.pathname === "/worktrees") {
+      return send(response, 200, { ok: true, root: activeRoot, worktrees: await listTaskWorktrees(activeRoot) });
+    }
+    if (request.method === "POST" && url.pathname === "/worktrees/prepare") {
+      const approved = await approvedBody(request, "worktree.prepare");
+      const body = approved.body;
+      if (typeof body.taskId !== "string") throw new Error("taskId is required.");
+      const record = await prepareTaskWorktree(activeRoot, body.taskId, typeof body.baseRef === "string" ? body.baseRef : "HEAD");
+      return send(response, 200, { ok: true, worktree: record });
+    }
+    if (request.method === "POST" && url.pathname === "/worktrees/release") {
+      const approved = await approvedBody(request, "worktree.release");
+      const body = approved.body;
+      if (typeof body.taskId !== "string") throw new Error("taskId is required.");
+      const record = await releaseTaskWorktree(activeRoot, body.taskId, body.force === true);
+      return send(response, 200, { ok: true, worktree: record });
+    }
+
     if (request.method === "POST" && url.pathname === "/git/clone") {
-      const body = await approvedBody(request, "git.clone");
-      const repositoryUrl = typeof body.url === "string" ? body.url.trim() : "";
-      const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(repositoryUrl);
-      if (!match) throw new Error("Only HTTPS GitHub repository URLs are supported.");
-      const directoryName = match[2];
-      const repositoriesRoot = path.join(path.resolve(ROOT), "repositories");
-      await mkdir(repositoriesRoot, { recursive: true });
-      const target = path.join(repositoriesRoot, directoryName);
-      if (target !== repositoriesRoot && !target.startsWith(`${repositoriesRoot}${path.sep}`)) {
-        throw new Error("Clone target escapes the repositories directory.");
-      }
-      await runGit(repositoriesRoot, ["clone", "--", repositoryUrl, directoryName], 180_000);
-      await selectWorkspaceRoot(target);
-      const [branch, head] = await Promise.all([
-        runGit(activeRoot, ["branch", "--show-current"]),
-        runGit(activeRoot, ["rev-parse", "--short=12", "HEAD"]),
-      ]);
-      return send(response, 200, {
-        ok: true,
-        name: directoryName,
-        root: activeRoot,
-        branch: branch.stdout.trim(),
-        head: head.stdout.trim(),
+      return send(response, 410, {
+        ok: false,
+        error: "Remote clone is retired in the companion. Select an installation repository through the authenticated server-side GitHub App route.",
       });
     }
 
     if (request.method === "POST" && url.pathname === "/approvals/request") {
       const body = await readBody(request);
       if (typeof body.action !== "string" || !body.input || typeof body.input !== "object") throw new Error("action and input are required.");
+      const head = await runGit(activeRoot, ["rev-parse", "HEAD"]);
+      validateContractBoundInput(body.input as JsonRecord, body.action, head.stdout.trim());
+      await mutationRoot(body.input);
       return send(response, 200, { ok: true, ...requestApproval(body.action, body.input) });
     }
     if (request.method === "POST" && url.pathname === "/approvals/approve") {
@@ -185,21 +227,43 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       if (typeof body.path !== "string") throw new Error("path is required.");
       return send(response, 200, { ok: true, ...(await readWorkspaceFile(activeRoot, body.path)) });
     }
+    if (request.method === "POST" && url.pathname === "/context/search") {
+      const body = await readBody(request);
+      const query = typeof body.query === "string" ? body.query.trim().slice(0, 2_000) : "";
+      const maxFiles = Math.min(Math.max(Number(body.maxFiles) || 8, 1), 32);
+      const maxTokens = Math.min(Math.max(Number(body.maxTokens) || 12_000, 256), 64_000);
+      const entries = await listWorkspace(activeRoot, ".", 6) as unknown[];
+      const paths = flattenWorkspaceFiles(entries);
+      const files = [] as Array<{ path: string; content: string }>;
+      for (const filePath of paths) {
+        if (files.length >= 200) break;
+        try {
+          const file = await readWorkspaceFile(activeRoot, filePath);
+          if (file.content.trim()) files.push({ path: file.path, content: file.content.slice(0, 32_000) });
+        } catch {
+          // Binary, unreadable, and sensitive files are omitted from context.
+        }
+      }
+      const snapshotId = `companion-${Date.now().toString(36)}`;
+      const index = buildRepositoryIndex(files, snapshotId, { maxFiles: 500 });
+      const context = retrieveRepositoryContext(index, query, { maxFiles, maxTokens });
+      return send(response, 200, { ok: true, ...context, inventoryFiles: files.length });
+    }
     if (request.method === "POST" && url.pathname === "/fs/write") {
-      const body = await approvedBody(request, "fs.write");
-      return send(response, 200, { ok: true, written: await writeWorkspaceFiles(activeRoot, body.files) });
+      const approved = await approvedBody(request, "fs.write");
+      return send(response, 200, { ok: true, written: await writeWorkspaceFiles(approved.root, approved.body.files) });
     }
     if (request.method === "POST" && url.pathname === "/fs/delete") {
-      const body = await approvedBody(request, "fs.delete");
-      return send(response, 200, { ok: true, deleted: await deleteWorkspacePaths(activeRoot, body.paths) });
+      const approved = await approvedBody(request, "fs.delete");
+      return send(response, 200, { ok: true, deleted: await deleteWorkspacePaths(approved.root, approved.body.paths) });
     }
     if (request.method === "POST" && url.pathname === "/terminal/execute") {
-      const body = await approvedBody(request, "terminal.execute");
-      return send(response, 200, { ok: true, ...(await runShell(activeRoot, body)) });
+      const approved = await approvedBody(request, "terminal.execute");
+      return send(response, 200, { ok: true, ...(await runShell(approved.root, approved.body)) });
     }
     if (request.method === "POST" && url.pathname === "/terminal/execute-batch") {
-      const body = await approvedBody(request, "terminal.execute-batch");
-      return send(response, 200, { ok: true, ...(await runShellBatch(activeRoot, body)) });
+      const approved = await approvedBody(request, "terminal.execute-batch");
+      return send(response, 200, { ok: true, ...(await runShellBatch(approved.root, approved.body)) });
     }
 
     if (request.method === "GET" && url.pathname === "/git/status") {
@@ -216,68 +280,68 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       return send(response, 200, { ok: true, stdout: result.stdout, stderr: result.stderr });
     }
     if (request.method === "POST" && url.pathname === "/git/commit") {
-      const body = await approvedBody(request, "git.commit");
+      const approved = await approvedBody(request, "git.commit");
+      const body = approved.body;
       const paths = normalizePaths(body.paths);
       const message = typeof body.message === "string" ? body.message.trim() : "";
       if (!message || message.length > 200) throw new Error("message must be 1 to 200 characters.");
-      await runGit(activeRoot, ["add", "--", ...paths]);
-      const result = await runGit(activeRoot, ["commit", "-m", message]);
-      const head = await runGit(activeRoot, ["rev-parse", "--short=12", "HEAD"]);
+      await runGit(approved.root, ["add", "--", ...paths]);
+      const result = await runGit(approved.root, ["commit", "-m", message]);
+      const head = await runGit(approved.root, ["rev-parse", "--short=12", "HEAD"]);
       return send(response, 200, { ok: true, head: head.stdout.trim(), stdout: result.stdout, stderr: result.stderr });
     }
     if (request.method === "POST" && url.pathname === "/git/action") {
-      const body = await approvedBody(request, "git.remote");
-      const operation = typeof body.operation === "string" ? body.operation : "";
-      const allowed = new Set(["pull", "push", "fetch", "checkout", "branch", "merge"]);
-      if (!allowed.has(operation)) throw new Error("Unsupported Git operation.");
-      const args = Array.isArray(body.args) ? body.args.map((item) => {
-        if (typeof item !== "string" || item.length > 256 || item.includes("\0")) throw new Error("Invalid Git argument.");
-        return item;
-      }) : [];
-      const result = await runGit(activeRoot, [operation, ...args], 120_000);
-      return send(response, 200, { ok: true, stdout: result.stdout, stderr: result.stderr });
-    }
-    if (request.method === "POST" && url.pathname === "/provider/github/pull-request") {
-      const body = await approvedBody(request, "github.pull-request");
-      const token = process.env.GITHUB_TOKEN?.trim();
-      if (!token) throw new Error("GITHUB_TOKEN is not configured in the companion environment.");
-      const repository = typeof body.repository === "string" ? body.repository : "";
-      const [owner, repo, extra] = repository.split("/");
-      if (!owner || !repo || extra || !/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) throw new Error("repository must be owner/name.");
-      const payload = { title: body.title, body: body.body ?? "", head: body.head, base: body.base };
-      if ([payload.title, payload.head, payload.base].some((value) => typeof value !== "string" || !value.trim())) throw new Error("title, head, and base are required.");
-      const githubResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "Conductor-Companion", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      return send(response, 410, {
+        ok: false,
+        error: "The legacy /git/action remote path is retired. Protected publication is available only through the server-side GitHub App merge route.",
       });
-      const result = await githubResponse.json() as Record<string, unknown>;
-      if (!githubResponse.ok) throw new Error(typeof result.message === "string" ? result.message : "GitHub pull request creation failed.");
-      return send(response, 200, { ok: true, number: result.number, url: result.html_url });
     }
-    if (request.method === "POST" && url.pathname === "/provider/github/repository") {
-      const body = await approvedBody(request, "github.create-repository");
-      const token = process.env.GITHUB_TOKEN?.trim();
-      if (!token) throw new Error("GITHUB_TOKEN is not configured in the companion environment.");
-      const name = typeof body.name === "string" ? body.name.trim() : "";
-      const description = typeof body.description === "string" ? body.description.trim().slice(0, 1_000) : "";
-      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(name)) throw new Error("name must be a valid GitHub repository name.");
-      const githubResponse = await fetch("https://api.github.com/user/repos", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "Conductor-Companion", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description, private: body.private !== false, auto_init: body.autoInit === true }),
+    if (request.method === "POST" && url.pathname.startsWith("/provider/github/")) {
+      return send(response, 410, {
+        ok: false,
+        error: "Legacy shared-token GitHub publication is retired. Use the server-side GitHub App publication permit flow.",
       });
-      const result = await githubResponse.json() as Record<string, unknown>;
-      if (!githubResponse.ok) throw new Error(typeof result.message === "string" ? result.message : "GitHub repository creation failed.");
-      return send(response, 200, { ok: true, repository: result.full_name, url: result.html_url, cloneUrl: result.clone_url, defaultBranch: result.default_branch ?? "main" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/mcp/read") {
+      const body = await readBody(request);
+      if (typeof body.name !== "string" || !body.name.trim()) throw new Error("name is required.");
+      const gatewayUrl = process.env.MCP_GATEWAY_URL?.trim();
+      if (!gatewayUrl) throw new Error("MCP_GATEWAY_URL is not configured in the companion environment.");
+      const result = await invokeReadOnlyMcpTool({
+        gatewayUrl,
+        name: body.name,
+        arguments: body.arguments && typeof body.arguments === "object" && !Array.isArray(body.arguments) ? body.arguments as Record<string, unknown> : {},
+        transport: async (target, envelope) => {
+          const gatewayResponse = await fetch(target, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(process.env.MCP_GATEWAY_TOKEN?.trim() ? { Authorization: `Bearer ${process.env.MCP_GATEWAY_TOKEN.trim()}` } : {}),
+            },
+            body: JSON.stringify(envelope),
+          });
+          const payload = await gatewayResponse.json() as unknown;
+          if (!gatewayResponse.ok) throw new Error(`MCP gateway failed (${gatewayResponse.status}).`);
+          return payload;
+        },
+      });
+      return send(response, 200, { ok: true, result });
     }
 
     return send(response, 404, { ok: false, error: "Not found." });
   } catch (error) {
-    return send(response, 400, { ok: false, error: error instanceof Error ? error.message : "Companion request failed." });
+    const pathname = request.url?.split("?")[0] ?? "companion.request";
+    const failure = normalizeToolFailure(error, pathname);
+    return send(response, 400, { ok: false, error: failure });
   }
 }
 
-createServer((request, response) => void handle(request, response)).listen(PORT, HOST, () => {
-  process.stdout.write(`Conductor execution companion listening on http://${HOST}:${PORT}\nWorkspace: ${ROOT}\n`);
-});
+export function startCompanionServer() {
+  return createServer((request, response) => void handle(request, response)).listen(PORT, HOST, () => {
+    process.stdout.write(`Conductor execution companion listening on http://${HOST}:${PORT}\nWorkspace: ${ROOT}\n`);
+  });
+}
+
+const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isMainModule) startCompanionServer();

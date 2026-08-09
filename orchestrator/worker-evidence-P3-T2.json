@@ -1,0 +1,124 @@
+{
+  "taskId": "P3-T2",
+  "workerId": "luna-p3-t2-finish",
+  "status": "ready_for_independent_review",
+  "summary": "Completed the MCP permissions vertical slice with durable workspace and agent policies, default-deny evaluation, workspace-ceiling enforcement, immutable server-derived risk and approval labels, invocation-time revision/credential/allowlist checks, append-only audit, a real API-backed accessible portal, and a rebuilt Docker runtime smoke test.",
+  "changedFiles": [
+    "lib/mcp-policy.ts",
+    "lib/mcp-contract.ts",
+    "lib/mcp-registry.ts",
+    "app/api/mcp/policies/route.ts",
+    "app/api/agent/route.ts",
+    "lib/environment-store.ts",
+    "db/schema.ts",
+    "drizzle/0006_cold_peter_quill.sql",
+    "drizzle/meta/0006_snapshot.json",
+    "drizzle/meta/_journal.json",
+    "app/portal/mcp-permissions-panel.tsx",
+    "app/portal/mcp-permissions.module.css",
+    "app/portal/page.tsx",
+    "tests/mcp-policy.test.ts",
+    "tests/portal-live.spec.ts"
+  ],
+  "scopeExpansion": {
+    "paths": [
+      "lib/mcp-policy.ts",
+      "lib/mcp-contract.ts",
+      "lib/mcp-registry.ts",
+      "lib/environment-store.ts",
+      "db/schema.ts",
+      "drizzle/0006_cold_peter_quill.sql",
+      "drizzle/meta/0006_snapshot.json",
+      "drizzle/meta/_journal.json"
+    ],
+    "reason": "The roadmap UI/API scope could not satisfy immediate revocation or durable least-privilege policy by itself. Invocation-time authorization, server-side policy persistence, optimistic revisions, and append-only audit require the shared MCP runtime and D1 schema paths."
+  },
+  "checks": [
+    {
+      "command": "node --import tsx --test tests/mcp-contract.test.ts tests/mcp-gateway.test.ts tests/mcp-registry.test.ts tests/mcp-policy.test.ts",
+      "exitCode": 0,
+      "summary": "21 MCP tests passed, including default deny, workspace ceiling, side-effect fail-closed behavior, stale policy/server revision, allowlist removal, missing or rotated credential, and zero transport calls after denial."
+    },
+    {
+      "command": "npm run db:generate",
+      "exitCode": 0,
+      "summary": "Drizzle schema and generated migration metadata are synchronized; no ungenerated schema change remained."
+    },
+    {
+      "command": "fresh migration replay in python:3.12-alpine against SQLite memory database",
+      "exitCode": 0,
+      "summary": "All 7 migrations replayed on a clean database; 5 MCP tables and 4 append-only registry/policy triggers were present."
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "summary": "TypeScript validation passed."
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "summary": "Repository lint passed."
+    },
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "summary": "Production build passed; 98 application tests passed with one explicit live-harness opt-in skip, and all 15 companion tests passed."
+    },
+    {
+      "command": "docker compose -f compose.yaml -f compose.harnesses.yaml -f compose.mcp.yaml up -d --build --force-recreate web mcp-gateway",
+      "exitCode": 0,
+      "summary": "Built image sha256:5586819d72e85655a778949626508477cea87f2f4e98b7406a0197f2fa188302 and recreated the web, companion, LangGraph, and MCP services; /portal returned HTTP 200."
+    },
+    {
+      "command": "npx playwright test tests/portal-live.spec.ts --workers=1 --grep MCP-control-center-equivalent",
+      "exitCode": 0,
+      "summary": "Targeted MCP portal flow passed 1/1 with real browser keyboard navigation, default-deny explanation, scoped administrator requests, agent ceiling, immutable risk labels, and responsive/accessibility assertions."
+    },
+    {
+      "command": "npm run test:e2e",
+      "exitCode": 0,
+      "summary": "All 7 portal E2E tests passed after correcting stale tab locators from button role to the portal's accessible tab role."
+    },
+    {
+      "command": "live MCP policy lifecycle against rebuilt Compose web and persistent D1",
+      "exitCode": 0,
+      "summary": "Observed 44 of 44 tools default-denied; unauthenticated mutation returned 401; agent scope expansion returned 409; workspace allow plus agent deny resolved to deny; stale revision returned 409; revoke took status to revoked; re-register and reconnect restored connected."
+    },
+    {
+      "command": "temporary live administrator cleanup verification",
+      "exitCode": 0,
+      "summary": "Restored the exercised workspace and agent decisions to inherit, recreated the web container without the temporary in-memory administrator token, verified MCP_ADMIN_TOKEN is not configured, and left the MCP server connected."
+    }
+  ],
+  "securityEvidence": [
+    "Policy evaluation is deny unless the workspace explicitly allows the exact server and tool; agent policy can inherit or deny but cannot broaden the workspace ceiling.",
+    "Risk and approval fields are derived from the server-side discovered descriptor and are not accepted from policy mutation bodies.",
+    "Only explicitly allowed read tools are materialized for model use. Write, execute, external, or approval-labelled tools remain unavailable until a resumable payload-bound approval bridge exists.",
+    "Every MCP transport invocation re-checks workspace and agent decision, policy revision, server revision and status, current allowlist membership, current endpoint, and current credential fingerprint.",
+    "Regression tests prove revoked/disconnected servers, stale revisions, new agent denies, removed allowlist entries, missing secrets, and credential rotation all cause zero transport calls.",
+    "Policy mutation requires the server-side administrator credential, optimistic revision, and idempotency key; actor identity cannot be supplied by the request body.",
+    "Policy audit is append-only. Stored and returned audit records contain no tool arguments, authorization headers, bearer values, API key fields, token fields, or secret references.",
+    "The portal holds its administrator token only in React component memory and uses a password field with storage disabled."
+  ],
+  "liveEvidence": {
+    "initialDefaultDeniedTools": 44,
+    "unauthenticatedMutationStatus": 401,
+    "agentScopeExpansionStatus": 409,
+    "effectiveDecisionAfterAgentDeny": "deny",
+    "staleRevisionStatus": 409,
+    "serverStatusAfterRevoke": "revoked",
+    "finalServerStatus": "connected",
+    "finalWorkspaceDecision": "inherit",
+    "finalAgentDecision": "inherit",
+    "policyAuditEventsObserved": 4,
+    "secretOrArgumentsPresentInApiResponses": false,
+    "temporaryAdministratorConfiguredAfterCleanup": false
+  },
+  "knownLimits": [
+    "Side-effecting MCP tools intentionally remain unavailable; P3-T2 does not weaken payload-bound approval requirements to make them appear usable.",
+    "The administrator token is deliberately unconfigured after live smoke cleanup. An operator must supply MCP_ADMIN_TOKEN at runtime before making policy changes through the portal.",
+    "The Docker MCP Gateway image is still the floating latest tag and is deferred to P6-T1 image pinning and vulnerability evidence.",
+    "Live revoke/reconnect was validated through the real registry and D1 API; zero transport after revocation is deterministically proven by invocation-wrapper tests rather than relying on nondeterministic model tool choice."
+  ],
+  "publication": "No orchestrator submission/review, commit, push, merge, deployment, publication, or real secret change was performed by this worker."
+}

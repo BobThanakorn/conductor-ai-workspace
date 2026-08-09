@@ -1,13 +1,20 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 import "./portal.css";
+import { invokeApprovedCompanionTool, type CompanionToolId } from "@/lib/agent-tool-adapter";
+import { recoverExplicitCommandBatch } from "@/lib/agent-safety";
+import { McpPermissionsPanel } from "./mcp-permissions-panel";
+import { AutomationsPanel } from "./automations-panel";
 
-const COMPANION_URL = "http://127.0.0.1:8765";
-const LANGGRAPH_COMPANION_URL = "http://127.0.0.1:8766";
+// The browser never reaches a companion port directly. The server-side proxy is
+// a bounded route allowlist over the private Compose network.
+const COMPANION_URL = "/api/companion";
+const LANGGRAPH_COMPANION_URL = "/api/companion/langgraph";
 const DEFAULT_WORKSPACE_ID = "workspace_local";
 
 type ModelStatus = "ready" | "configured" | "unavailable";
+type PortalTab = "chat" | "git" | "project" | "mcp" | "automations" | "benchmark";
 type AgentEngine = {
   id: "openai-agents" | "langgraph" | "pydantic-ai" | "crewai"
     | "microsoft-agent-framework" | "llamaindex" | "haystack" | "semantic-kernel";
@@ -113,6 +120,10 @@ type AgentProposal = {
   execution?: ExecutionStep | null;
   executions?: ExecutionStep[];
 };
+type AgentContract = {
+  contractVersion: 2;
+  mutation: Record<string, unknown>;
+};
 type CompanionHealth = {
   ok?: boolean;
   root?: string;
@@ -156,6 +167,28 @@ type RepositorySummary = {
   } | null;
   updatedAt: string;
 };
+type HandoffRecord = {
+  id: string;
+  taskId: string;
+  fromRole: string;
+  toRole: string;
+  submittedBy?: string;
+  status: string;
+  evidenceDigest: string;
+  createdAt: string;
+};
+type HandoffDetailRecord = HandoffRecord & {
+  context: {
+    snapshotId: string;
+    files: Array<{ path: string; content: string; snapshotId: string }>;
+    totalTokens: number;
+  };
+  evidence: {
+    summary: string;
+    files: Array<{ path: string; change: string }>;
+    checks: Array<{ command: string; exitCode: number; stdout?: string; stderr?: string }>;
+  };
+};
 
 function uniqueKey(prefix: string) {
   return `${prefix}-${Date.now()}-${crypto.randomUUID()}`;
@@ -167,21 +200,6 @@ function flattenFiles(entries: FileEntry[]): FileEntry[] {
       ? flattenFiles(entry.children ?? [])
       : [entry],
   );
-}
-
-/**
- * A provider can occasionally return a prose-only plan even after being asked
- * for a structured batch. Preserve the user's exact, bounded commands as a
- * reviewable proposal rather than silently dropping the runnable request.
- */
-function explicitCommandBatch(message: string): ExecutionStep[] {
-  const commandPrefix = /^(?:python(?:3)?|node|npm|npx|pytest|go|cargo|dotnet|ruby|php|bash|sh)\b/i;
-  const normalized = message
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^(?:[-*]|\d+[.)])\s*/, ""))
-    .filter((line) => commandPrefix.test(line))
-    .filter((line) => line.length <= 4_000 && !/[\u0000-\u001f\u007f;|&<>]/.test(line));
-  return [...new Set(normalized)].slice(0, 8).map((command) => ({ command: normalizeExecutionCommand(command), args: [], timeoutMs: 120_000 }));
 }
 
 /** The Linux companion image provides python3; accept the friendlier `python` spelling in prompts. */
@@ -205,39 +223,19 @@ async function approvedCompanionAction<T>(
   action: string,
   endpoint: string,
   input: Record<string, unknown>,
+  contractMutation?: unknown,
 ): Promise<T> {
-  const request = await readJson<{ approvalId: string; digest: string }>(
-    await fetch(`${companionUrl}/approvals/request`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, input }),
-    }),
-  );
-  const approved = await readJson<{ token: string }>(
-    await fetch(`${companionUrl}/approvals/approve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        confirm: true,
-        approvalId: request.approvalId,
-        digest: request.digest,
-      }),
-    }),
-  );
-  return readJson<T>(
-    await fetch(`${companionUrl}${endpoint}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Conductor-Approval": approved.token,
-      },
-      body: JSON.stringify(input),
-    }),
-  );
+  void endpoint;
+  return invokeApprovedCompanionTool<T>({
+    baseUrl: companionUrl,
+    tool: action as CompanionToolId,
+    input,
+    contractMutation,
+  });
 }
 
 export default function PortalPage() {
-  const [activeTab, setActiveTab] = useState<"chat" | "git" | "project" | "benchmark">("chat");
+  const [activeTab, setActiveTab] = useState<PortalTab>("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
   const [agentMode, setAgentMode] = useState<"ask" | "agent">("agent");
@@ -260,11 +258,10 @@ export default function PortalPage() {
   ]);
   const [selectedEngine, setSelectedEngine] = useState<AgentEngine["id"]>("openai-agents");
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
+  const [pendingContract, setPendingContract] = useState<AgentContract | null>(null);
   const [terminalOutput, setTerminalOutput] = useState("");
   const [executionResults, setExecutionResults] = useState<ExecutionResult[]>([]);
   const [commitMessage, setCommitMessage] = useState("");
-  const [repositoryName, setRepositoryName] = useState("");
-  const [repositoryPrivate, setRepositoryPrivate] = useState(true);
   const [repositories, setRepositories] = useState<RepositorySummary[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(DEFAULT_WORKSPACE_ID);
   const [selectedTaskId, setSelectedTaskId] = useState("");
@@ -274,6 +271,9 @@ export default function PortalPage() {
   );
   const [benchmarkResults, setBenchmarkResults] = useState<BenchmarkResult[]>([]);
   const [benchmarkContextPaths, setBenchmarkContextPaths] = useState<string[]>([]);
+  const [handoffs, setHandoffs] = useState<HandoffRecord[]>([]);
+  const [handoffIdentity, setHandoffIdentity] = useState("");
+  const [handoffDetails, setHandoffDetails] = useState<Record<string, HandoffDetailRecord>>({});
 
   const activeTask = workspace.activeTask ?? workspace.tasks?.[0] ?? null;
   const companionUrl = selectedEngine === "langgraph"
@@ -297,6 +297,35 @@ export default function PortalPage() {
       : repositories;
   }, [repositories, repositoryFilter]);
 
+  function portalTabProps(tab: PortalTab) {
+    return {
+      id: `portal-tab-${tab}`,
+      role: "tab" as const,
+      "aria-selected": activeTab === tab,
+      "aria-controls": "portal-active-panel",
+      tabIndex: activeTab === tab ? 0 : -1,
+      onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+        const tabs = Array.from(
+          event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='tab']") ?? [],
+        );
+        const current = tabs.indexOf(event.currentTarget);
+        const next = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? tabs.length - 1
+            : event.key === "ArrowRight"
+              ? (current + 1) % tabs.length
+              : event.key === "ArrowLeft"
+                ? (current - 1 + tabs.length) % tabs.length
+                : -1;
+        if (next < 0) return;
+        event.preventDefault();
+        tabs[next]?.focus();
+        tabs[next]?.click();
+      },
+    };
+  }
+
   const refresh = useCallback(async () => {
     setError("");
     const workspaceQuery = new URLSearchParams({ workspaceId: selectedWorkspaceId });
@@ -318,9 +347,11 @@ export default function PortalPage() {
           modelStatus?: Record<string, ModelStatus>;
           engines?: AgentEngine[];
         }>),
+      fetch(`/api/handoffs?${workspaceQuery}`, { cache: "no-store" })
+        .then(readJson<{ handoffs?: HandoffRecord[] }>),
     ]);
 
-    const [healthResult, treeResult, gitResult, workspaceResult, repositoriesResult, modelResult] = results;
+    const [healthResult, treeResult, gitResult, workspaceResult, repositoriesResult, modelResult, handoffResult] = results;
     const nextHealth = healthResult.status === "fulfilled"
       ? healthResult.value
       : { ok: false, error: "Local execution companion is not reachable." };
@@ -379,20 +410,25 @@ export default function PortalPage() {
         (model) => modelResult.value.modelStatus?.[model] === "ready",
       );
       setModels(options);
-      const nextEngines = modelResult.value.engines?.length
-        ? modelResult.value.engines
+      // Unavailable/configured engines are diagnostics, not selectable runtime
+      // choices. Keep them out of the UI entirely so the user cannot submit a
+      // request that the current deployment cannot execute.
+      const nextEngines = modelResult.value.engines
+        ? modelResult.value.engines.filter((engine) => engine.status === "ready")
         : [{ id: "openai-agents" as const, name: "OpenAI Agents SDK", status: "ready" as const }];
       setEngines(nextEngines);
       setSelectedEngine((current) =>
-        nextEngines.some((engine) => engine.id === current && engine.status === "ready")
+        nextEngines.some((engine) => engine.id === current)
           ? current
-          : nextEngines.find((engine) => engine.status === "ready")?.id ?? "openai-agents",
+          : nextEngines[0]?.id ?? "openai-agents",
       );
       const firstReady = options[0] ?? "";
       setSelectedModel((current) =>
         current && options.includes(current) ? current : firstReady,
       );
     }
+    if (handoffResult.status === "fulfilled") setHandoffs(handoffResult.value.handoffs ?? []);
+    else setHandoffs([]);
   }, [companionUrl, messages.length, selectedTaskId, selectedWorkspaceId]);
 
   useEffect(() => {
@@ -472,46 +508,6 @@ export default function PortalPage() {
     }
   }
 
-  async function cloneRepository() {
-    const repositoryUrl = window.prompt("GitHub repository URL (HTTPS)");
-    if (!repositoryUrl?.trim()) return;
-    if (!window.confirm(`Clone ${repositoryUrl.trim()} into the isolated workspace?`)) return;
-    setBusy(true);
-    setError("");
-    try {
-      const cloned = await approvedCompanionAction<{
-        name: string;
-        root: string;
-        branch: string;
-        head: string;
-      }>(companionUrl, "git.clone", "/git/clone", { url: repositoryUrl.trim() });
-      const registered = await readJson<{ repository: { id: string } }>(
-        await fetch("/api/repositories", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: cloned.name,
-            path: cloned.root,
-            provider: "github",
-            defaultBranch: cloned.branch || "main",
-            activeBranch: cloned.branch || "main",
-            baseSha: cloned.head,
-            headSha: cloned.head,
-          }),
-        }),
-      );
-      setSelectedWorkspaceId(registered.repository.id);
-      setSelectedTaskId("");
-      setMessages([]);
-      setProposal(null);
-      setExecutionResults([]);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Repository clone failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function selectRepository(repositoryId: string) {
     if (repositoryId === selectedWorkspaceId) return;
     const repository = repositories.find((item) => item.id === repositoryId);
@@ -534,6 +530,7 @@ export default function PortalPage() {
     setWorkspace({});
     setMessages([]);
     setProposal(null);
+    setPendingContract(null);
     setExecutionResults([]);
     setContextFiles([]);
     setBusy(false);
@@ -595,6 +592,25 @@ export default function PortalPage() {
     ]);
     const manuallyAttached = contextFiles.slice(-8);
     const manualPaths = new Set(manuallyAttached.map((file) => file.path));
+    // Ask the companion to search its server-side repository inventory first.
+    // This avoids making the browser's currently visible file list the source
+    // of truth for agent grounding.
+    try {
+      const response = await fetch(`${companionUrl}/context/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: message, maxFiles: 8, maxTokens: 12_000 }),
+      });
+      if (response.ok) {
+        const data = await response.json() as { files?: Array<{ path: string; content: string }> };
+        const serverFiles = (data.files ?? []).filter(
+          (file) => typeof file?.path === "string" && typeof file?.content === "string" && !manualPaths.has(file.path),
+        );
+        if (serverFiles.length > 0) return [...manuallyAttached, ...serverFiles].slice(0, 8);
+      }
+    } catch {
+      // Fall back to the already loaded tree when the companion is offline.
+    }
     const candidates = allFiles
       .filter((file) => textExtension.test(file.path) && !manualPaths.has(file.path))
       .map((file) => {
@@ -663,6 +679,7 @@ export default function PortalPage() {
       const workspaceContextFiles = await collectRepositoryContext(message);
       const data = await readJson<{
         output?: AgentProposal;
+        agentContract?: AgentContract;
         model?: string;
         engine?: string;
         orchestration?: { checkpointId?: string; status?: string };
@@ -696,7 +713,7 @@ export default function PortalPage() {
       const fallbackExecutions = agentMode === "agent" &&
         !output.execution &&
         !output.executions?.length
-        ? explicitCommandBatch(message)
+        ? recoverExplicitCommandBatch(message)
         : [];
       const proposalOutput = fallbackExecutions.length
         ? {
@@ -707,6 +724,11 @@ export default function PortalPage() {
             needsApproval: true,
           }
         : output;
+      const hasMutation = Boolean(
+        proposalOutput.artifacts?.length || proposalOutput.execution || proposalOutput.executions?.length,
+      );
+      const contract = data.agentContract ?? null;
+      setPendingContract(contract);
       setMessages((current) => [...current, {
         id: `${key}-response`,
         role: "assistant",
@@ -716,11 +738,9 @@ export default function PortalPage() {
         framework: engineLabel(data.engine ?? selectedEngine),
         model: data.model ?? selectedModel,
       }]);
-      if (agentMode === "agent" && (
-        proposalOutput.artifacts?.length ||
-        proposalOutput.execution ||
-        proposalOutput.executions?.length
-      )) {
+      if (agentMode === "agent" && hasMutation && !contract) {
+        setError("The provider returned a mutation without a Contract v2 approval binding. Request it again before applying or running anything.");
+      } else if (agentMode === "agent" && hasMutation) {
         setProposal(proposalOutput);
       }
       await refresh();
@@ -826,6 +846,10 @@ export default function PortalPage() {
       ...(proposal.executions ?? []),
     ];
     if (!(proposal.artifacts?.length || executions.length)) return;
+    if (!pendingContract) {
+      setError("This mutation proposal is missing its Contract v2 approval binding. Request it again with an active task.");
+      return;
+    }
     if (!window.confirm(
       `Apply ${proposal.artifacts?.length ?? 0} reviewed file(s) to the local workspace${executions.length ? ` and run ${executions.length} reviewed command(s)` : ""}?`,
     )) return;
@@ -841,6 +865,7 @@ export default function PortalPage() {
           {
             files: proposal.artifacts.map(({ path, content }) => ({ path, content })),
           },
+          pendingContract.mutation,
         );
       }
       if (executions.length) {
@@ -855,10 +880,12 @@ export default function PortalPage() {
           "terminal.execute-batch",
           "/terminal/execute-batch",
           { commands },
+          pendingContract.mutation,
         );
         setExecutionResults(result.results);
       }
       setProposal(null);
+      setPendingContract(null);
       await refresh();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Proposal execution failed.");
@@ -890,48 +917,65 @@ export default function PortalPage() {
     }
   }
 
-  async function gitPush() {
-    if (!window.confirm(`Push branch ${health?.branch || "current branch"} to its configured remote?`)) return;
+  async function inspectHandoff(handoff: HandoffRecord) {
+    if (!handoffIdentity.trim()) {
+      setError("Paste a short-lived signed handoff identity token before loading protected evidence.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      const result = await approvedCompanionAction<{ stdout?: string; stderr?: string }>(
-        companionUrl,
-        "git.remote",
-        "/git/action",
-        { operation: "push", args: [] },
-      );
-      setTerminalOutput([result.stdout, result.stderr].filter(Boolean).join("\n") || "Push completed.");
-      await refresh();
+      const query = new URLSearchParams({
+        workspaceId: selectedWorkspaceId,
+        taskId: handoff.taskId,
+        details: "full",
+      });
+      const result = await readJson<{ handoffs?: HandoffDetailRecord[] }>(await fetch(`/api/handoffs?${query}`, {
+        cache: "no-store",
+        headers: { "X-Conductor-Identity": handoffIdentity.trim() },
+      }));
+      const detail = result.handoffs?.find((item) => item.id === handoff.id);
+      if (!detail) throw new Error("Protected handoff evidence was not returned.");
+      setHandoffDetails((current) => ({ ...current, [handoff.id]: detail }));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Git push failed.");
+      setError(failure instanceof Error ? failure.message : "Handoff evidence could not be loaded.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function createRepository(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = repositoryName.trim();
-    if (!name) return;
-    if (!window.confirm(`Create ${repositoryPrivate ? "private" : "public"} GitHub repository "${name}"?`)) return;
+  async function mutateHandoff(
+    handoff: HandoffRecord,
+    action: "accept" | "approve" | "reject" | "retry" | "discard" | "publish",
+  ) {
+    if (!handoffIdentity.trim()) {
+      setError("Paste the signed worker or human handoff identity token required for this action.");
+      return;
+    }
+    const note = action === "reject" ? window.prompt("Reason for rejecting this handoff:")?.trim() : undefined;
+    if (action === "reject" && !note) return;
+    if (!window.confirm(`Record handoff action “${action}” for ${handoff.fromRole} → ${handoff.toRole}?`)) return;
+    const idempotencyKey = uniqueKey(`handoff-${action}`);
+    const body = action === "approve" || action === "reject"
+      ? { action: "review", workspaceId: selectedWorkspaceId, handoffId: handoff.id, decision: action, evidenceDigest: handoff.evidenceDigest, ...(note ? { notes: note } : {}), idempotencyKey }
+      : action === "retry" || action === "discard"
+        ? { action: "resolve", workspaceId: selectedWorkspaceId, handoffId: handoff.id, resolution: action, idempotencyKey }
+        : { action, workspaceId: selectedWorkspaceId, handoffId: handoff.id, idempotencyKey };
     setBusy(true);
     setError("");
     try {
-      const result = await approvedCompanionAction<{
-        repository?: string;
-        url?: string;
-        cloneUrl?: string;
-      }>(
-        companionUrl,
-        "github.create-repository",
-        "/provider/github/repository",
-        { name, description: "", private: repositoryPrivate, autoInit: false },
-      );
-      setTerminalOutput(`Created ${result.repository}\n${result.url ?? ""}\n${result.cloneUrl ?? ""}`);
-      setRepositoryName("");
+      await readJson(await fetch("/api/handoffs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+          "X-Conductor-Identity": handoffIdentity.trim(),
+        },
+        body: JSON.stringify(body),
+      }));
+      await refresh();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "GitHub repository creation failed.");
+      setError(failure instanceof Error ? failure.message : "Handoff action failed.");
     } finally {
       setBusy(false);
     }
@@ -942,7 +986,7 @@ export default function PortalPage() {
       <header className="desktop-titlebar">
         <div className="desktop-brand" aria-label="Conductor">C</div>
         <nav aria-label="Application menu">
-          <button type="button" onClick={() => void cloneRepository()} disabled={busy || !companionReady}>File</button>
+          <button type="button" onClick={() => void connectCurrentRepository()} disabled={busy || !companionReady}>File</button>
           <button type="button" onClick={() => document.querySelector<HTMLTextAreaElement>(".portal-composer textarea")?.focus()}>Edit</button>
           <button type="button" onClick={() => setWorkspaceOpen((open) => !open)}>View</button>
           <button type="button" onClick={() => window.alert("New task: Ctrl+N · Focus prompt: Ctrl+L · Send: Ctrl+Enter")}>Help</button>
@@ -964,7 +1008,6 @@ export default function PortalPage() {
           <div className="portal-label">REPOSITORIES</div>
           <div>
             <button type="button" onClick={() => void connectCurrentRepository()} disabled={busy || !companionReady} aria-label="Connect current repository">▣</button>
-            <button type="button" onClick={() => void cloneRepository()} disabled={busy || !companionReady} aria-label="Clone GitHub repository">＋</button>
           </div>
         </div>
         <input
@@ -1030,10 +1073,12 @@ export default function PortalPage() {
       <section className="portal-main">
         <header className="portal-header">
           <div className="portal-tabs" role="tablist" aria-label="Workspace sections">
-            <button type="button" className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>◌ Chat</button>
-            <button type="button" className={activeTab === "git" ? "active" : ""} onClick={() => setActiveTab("git")}>⑂ Git</button>
-            <button type="button" className={activeTab === "project" ? "active" : ""} onClick={() => setActiveTab("project")}>▣ Project</button>
-            <button type="button" className={activeTab === "benchmark" ? "active" : ""} onClick={() => setActiveTab("benchmark")}>◫ Benchmark</button>
+            <button type="button" {...portalTabProps("chat")} className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>◌ Chat</button>
+            <button type="button" {...portalTabProps("git")} className={activeTab === "git" ? "active" : ""} onClick={() => setActiveTab("git")}>⑂ Git</button>
+            <button type="button" {...portalTabProps("project")} className={activeTab === "project" ? "active" : ""} onClick={() => setActiveTab("project")}>▣ Project</button>
+            <button type="button" {...portalTabProps("mcp")} className={activeTab === "mcp" ? "active" : ""} onClick={() => setActiveTab("mcp")}>◆ MCP</button>
+            <button type="button" {...portalTabProps("automations")} className={activeTab === "automations" ? "active" : ""} onClick={() => setActiveTab("automations")}>◷ Automations</button>
+            <button type="button" {...portalTabProps("benchmark")} className={activeTab === "benchmark" ? "active" : ""} onClick={() => setActiveTab("benchmark")}>◫ Benchmark</button>
           </div>
           <div className="header-status">
             <span className={workspaceRuntimeReady ? "status-ready" : "status-offline"} />
@@ -1043,7 +1088,7 @@ export default function PortalPage() {
         </header>
 
         {error && <div className="portal-error" role="alert">{error}</div>}
-        <div className="portal-content">
+        <div className="portal-content" id="portal-active-panel" role="tabpanel" aria-labelledby={`portal-tab-${activeTab}`}>
           <div className="chat-column">
             {activeTab === "chat" && (
               <>
@@ -1171,9 +1216,9 @@ export default function PortalPage() {
                     <span className="context-count">{contextFiles.length} context file(s)</span>
                     <span className="composer-spacer" />
                     <select value={selectedEngine} onChange={(event) => setSelectedEngine(event.target.value as AgentEngine["id"])} aria-label="Select agent engine">
-                      {engines.map((engine) => (
-                        <option key={engine.id} value={engine.id} disabled={engine.status !== "ready"}>
-                          {engine.name} · {engine.status}
+                      {engines.filter((engine) => engine.status === "ready").map((engine) => (
+                        <option key={engine.id} value={engine.id}>
+                          {engine.name} · ready
                         </option>
                       ))}
                     </select>
@@ -1202,7 +1247,6 @@ export default function PortalPage() {
                 <div className="git-actions">
                   <input value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder="Commit message" maxLength={200} />
                   <button type="button" onClick={() => void gitCommit()} disabled={busy || !gitFiles.length || !commitMessage.trim()}>Review & commit</button>
-                  <button type="button" onClick={() => void gitPush()} disabled={busy || !workspaceRuntimeReady}>Review & push</button>
                 </div>
                 {terminalOutput && <pre className="terminal-output">{terminalOutput}</pre>}
               </section>
@@ -1217,20 +1261,74 @@ export default function PortalPage() {
                   <div><dt>Execution</dt><dd>{health?.executionMode || "Unavailable"}</dd></div>
                   <div><dt>Capabilities</dt><dd>{health?.capabilities?.join(", ") || "None reported"}</dd></div>
                 </dl>
-                <h2>Create a GitHub repository</h2>
-                <form className="repository-form" onSubmit={createRepository}>
-                  <input value={repositoryName} onChange={(event) => setRepositoryName(event.target.value)} placeholder="repository-name" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,99}" required />
-                  <label><input type="checkbox" checked={repositoryPrivate} onChange={(event) => setRepositoryPrivate(event.target.checked)} /> Private</label>
-                  <button type="submit" disabled={busy || !companionReady || !health?.integrations?.github}>Review & create</button>
-                </form>
-                <p className="form-help">
-                  {health?.integrations?.github
-                    ? "GitHub is configured. Creation is payload-bound and confirmation-gated."
-                    : "GitHub is not configured. Add GITHUB_TOKEN to .env and restart Docker Compose."}
-                </p>
+                <p className="form-help">GitHub installation repositories are selected through the authenticated server-side GitHub App route. Repository creation, clone, and direct push are not browser or companion capabilities.</p>
+                <section className="handoff-panel" aria-label="Role handoff workflow">
+                  <div className="handoff-heading">
+                    <div>
+                      <h2>Role handoff workflow</h2>
+                      <p>Planner → implementer → tester → reviewer; evidence is immutable and publication remains human-controlled.</p>
+                    </div>
+                    <button type="button" onClick={() => void refresh()} disabled={busy}>Refresh</button>
+                  </div>
+                  <label className="handoff-identity-field">
+                    <span>Short-lived signed identity</span>
+                    <input
+                      type="password"
+                      value={handoffIdentity}
+                      onChange={(event) => setHandoffIdentity(event.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste worker or human handoff token"
+                    />
+                    <small>Held only in this page memory; never sent to the model or persisted by the browser.</small>
+                  </label>
+                  {handoffs.length ? (
+                    <ol className="handoff-list">
+                      {handoffs.map((handoff) => (
+                        <li key={handoff.id} className={`handoff-item handoff-${handoff.status}`}>
+                          <div>
+                            <strong>{handoff.fromRole} → {handoff.toRole}</strong>
+                            <span>{handoff.status}</span>
+                          </div>
+                          <small>submitted by {handoff.submittedBy ?? "signed identity (protected)"} · {new Date(handoff.createdAt).toLocaleString()}</small>
+                          <code title={handoff.evidenceDigest}>evidence {handoff.evidenceDigest.slice(0, 12)}…</code>
+                          <div className="handoff-actions">
+                            <button type="button" onClick={() => void inspectHandoff(handoff)} disabled={busy || !handoffIdentity.trim()}>Inspect evidence</button>
+                            {handoff.status === "pending" && <button type="button" onClick={() => void mutateHandoff(handoff, "accept")} disabled={busy || !handoffIdentity.trim()}>Accept</button>}
+                            {handoff.status === "accepted" && handoff.toRole === "reviewer" && <>
+                              <button type="button" onClick={() => void mutateHandoff(handoff, "approve")} disabled={busy || !handoffIdentity.trim()}>Approve</button>
+                              <button type="button" className="danger" onClick={() => void mutateHandoff(handoff, "reject")} disabled={busy || !handoffIdentity.trim()}>Reject</button>
+                            </>}
+                            {handoff.status === "conflict" && <>
+                              <button type="button" onClick={() => void mutateHandoff(handoff, "retry")} disabled={busy || !handoffIdentity.trim()}>Retry</button>
+                              <button type="button" className="danger" onClick={() => void mutateHandoff(handoff, "discard")} disabled={busy || !handoffIdentity.trim()}>Discard</button>
+                            </>}
+                            {handoff.status === "approved" && <button type="button" onClick={() => void mutateHandoff(handoff, "publish")} disabled={busy || !handoffIdentity.trim()}>Authorize publication record</button>}
+                          </div>
+                          {handoffDetails[handoff.id] && <div className="handoff-evidence">
+                            <strong>{handoffDetails[handoff.id].evidence.summary}</strong>
+                            <small>snapshot {handoffDetails[handoff.id].context.snapshotId} · {handoffDetails[handoff.id].context.totalTokens} estimated tokens</small>
+                            {handoffDetails[handoff.id].context.files.map((file) => <details key={file.path}>
+                              <summary>{file.path}</summary>
+                              <pre>{file.content}</pre>
+                            </details>)}
+                            {handoffDetails[handoff.id].evidence.checks.map((check) => <div className="handoff-check" key={`${check.command}-${check.exitCode}`}>
+                              <code>{check.command}</code><span className={check.exitCode === 0 ? "passed" : "failed"}>exit {check.exitCode}</span>
+                            </div>)}
+                          </div>}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : <p className="empty-copy">No role handoff has been recorded for this task.</p>}
+                </section>
                 {terminalOutput && <pre className="terminal-output">{terminalOutput}</pre>}
               </section>
             )}
+
+            {activeTab === "mcp" && (
+              <McpPermissionsPanel workspaceId={selectedWorkspaceId} />
+            )}
+            {activeTab === "automations" && <AutomationsPanel workspaceId={selectedWorkspaceId} identity={handoffIdentity} onIdentityChange={setHandoffIdentity} />}
 
             {activeTab === "benchmark" && (
               <section className="real-panel benchmark-panel">

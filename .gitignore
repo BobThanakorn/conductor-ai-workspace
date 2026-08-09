@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/test-results/
 
 # next.js
 /.next/
@@ -50,3 +51,14 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/workspace/
+/artifacts/
+__pycache__/
+*.py[cod]
+
+# local roadmap orchestrator runtime (template and roadmap remain tracked)
+/orchestrator/state.json
+/orchestrator/state.json.lock
+
+# per-task isolated worktrees and lifecycle evidence
+/.conductor/

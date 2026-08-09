@@ -1,0 +1,33 @@
+{
+  "summary": "Implemented a persistent workspace-scoped MCP registry and lifecycle API. Registration accepts only administrator-configured allowlist IDs, lifecycle mutations require a server-side administrator token, discovery records provenance-labelled schemas and risk metadata, revocation and failure disable tools immediately, and the OpenAI Agents runtime exposes only exact persisted read tools. Gateway and registry failures degrade to a model-only path with explicit telemetry and never forward credentials to API responses, model context, or telemetry.",
+  "files": [
+    { "path": "lib/mcp-contract.ts", "change": "added", "purpose": "Strict lifecycle action, status, public registry, tool catalog, provenance and runtime contracts" },
+    { "path": "lib/mcp-gateway.ts", "change": "added", "purpose": "Bounded streamable-HTTP initialization, initialized notification, capability discovery, schema/risk normalization and fail-closed errors" },
+    { "path": "lib/mcp-registry.ts", "change": "added", "purpose": "Administrator allowlist, persistent workspace registry lifecycle, revocation, secret references and default-deny runtime selection" },
+    { "path": "lib/environment-store.ts", "change": "modified", "purpose": "MCP server registry and append-only lifecycle event tables, indexes and triggers" },
+    { "path": "app/api/mcp/route.ts", "change": "added", "purpose": "Workspace-scoped registry listing and administrator-gated lifecycle API" },
+    { "path": "lib/agent-provider.ts", "change": "modified", "purpose": "Server-only MCP registry, administrator and gateway authentication bindings" },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Load connected registry servers through exact read-tool policy and degrade gateway failures safely" },
+    { "path": "compose.mcp.yaml", "change": "modified", "purpose": "Pass registry and shared gateway authentication configuration to the correct services" },
+    { "path": ".env.example", "change": "modified", "purpose": "Document server-only MCP administrator, gateway and allowlist configuration" },
+    { "path": "package.json", "change": "modified", "purpose": "Add MCP Compose configuration and lifecycle scripts" },
+    { "path": "tests/mcp-contract.test.ts", "change": "added", "purpose": "Validate bounded lifecycle actions and reject arbitrary endpoint payloads" },
+    { "path": "tests/mcp-gateway.test.ts", "change": "added", "purpose": "Validate URL policy, protocol lifecycle, provenance, schemas, risk and sanitized failures" },
+    { "path": "tests/mcp-registry.test.ts", "change": "added", "purpose": "Validate allowlist, administrator gate, revocation, unavailable states, exact read-tool exposure and durable append-only state" }
+  ],
+  "checks": [
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed" },
+    { "command": "node --experimental-strip-types --test tests/mcp-*.test.ts", "exitCode": 0, "summary": "8 MCP contract, gateway and registry tests passed" },
+    { "command": "docker compose -f compose.yaml -f compose.mcp.yaml config", "exitCode": 0, "summary": "Merged MCP Compose configuration rendered successfully with test-only environment overrides and output suppressed to avoid credential disclosure" },
+    { "command": "npm test", "exitCode": 0, "summary": "Build passed; 80 application tests passed with 1 opt-in live harness skip, and all 15 companion tests passed" },
+    { "command": "npm run lint", "exitCode": 0, "summary": "Lint passed after removing the one MCP unused-import warning" }
+  ],
+  "risks": [
+    "Tool side-effect classification is deterministic and name-based; P3-T2 must add explicit per-server and per-tool administrator policy before write, execute or external tools can be exposed.",
+    "The Docker MCP Gateway image remains tagged latest and should be pinned and scanned during P6-T1."
+  ],
+  "followUps": [
+    "Live connect/discover smoke was intentionally not run because this worker was prohibited from calling the external GitHub MCP server or reading/creating .mcp.env. Run it after MCP_ADMIN_TOKEN and gateway secrets are configured.",
+    "P3-T2 can consume GET /api/mcp registrationOptions, servers and events; mutation requests use allowlistId/serverId only and require X-Conductor-MCP-Admin."
+  ]
+}

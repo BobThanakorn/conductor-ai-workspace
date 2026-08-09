@@ -1,0 +1,31 @@
+{
+  "summary": "Upgraded the six external harnesses from read-only benchmark adapters to proposal-producing Agent adapters. Each native FastAPI service now emits a schema-shaped proposal for Agent mode; the shared route validates it, recovers only explicit bounded file/command requests when a provider emits prose, and binds every write and execute operation to one human approval and one repository snapshot.",
+  "files": [
+    { "path": "agent-harnesses/common/app.py", "change": "modified", "purpose": "Emit the shared Agent/Ask proposal contract and provider telemetry from all six harness images." },
+    { "path": "lib/external-harness.ts", "change": "modified", "purpose": "Dispatch external harnesses with mode/context, retry transient failures, parse and normalize Contract v2 proposals, and normalize command quoting." },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Integrate external proposals with deterministic policy, explicit command/file recovery, durable telemetry, and Contract v2 approval bindings." },
+    { "path": "lib/agent-safety.ts", "change": "modified", "purpose": "Recover only explicit interpreter commands and explicit file drafts under bounded, metacharacter-free rules." },
+    { "path": "compose.harnesses.yaml", "change": "verified", "purpose": "Run the six external harness services with health checks and the shared runtime configuration." },
+    { "path": "tests/external-harness.test.ts", "change": "modified", "purpose": "Verify mode propagation, retry behavior, and schema-valid provider proposal parsing." },
+    { "path": "tests/agent-safety.test.ts", "change": "modified", "purpose": "Verify conservative recovery of explicit files and bounded commands." },
+    { "path": "tests/harness-contract.test.mjs", "change": "added", "purpose": "Exercise the raw FastAPI /v1/agent contract inside each of the six running Compose services." }
+  ],
+  "checks": [
+    { "command": "docker compose -f compose.yaml -f compose.harnesses.yaml config", "exitCode": 0, "summary": "Compose configuration validated successfully." },
+    { "command": "npm run benchmark:agents", "exitCode": 0, "summary": "One live Ask iteration completed successfully for all eight ready engines with eight non-empty repository context files, token telemetry, latency, tools and audit events." },
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed." },
+    { "command": "npm run lint", "exitCode": 0, "summary": "ESLint passed." },
+    { "command": "npm test", "exitCode": 0, "summary": "Build plus 67 application tests, one intentionally skipped opt-in live harness test, and 10 companion tests passed." },
+    { "command": "CONDUCTOR_LIVE_HARNESS_TEST=1 npm run test:harness-contract", "exitCode": 0, "summary": "Raw FastAPI responses from pydantic-ai, crewai, microsoft-agent-framework, llamaindex, haystack and semantic-kernel each contained proposal=true, one artifact, one execution, R1 and needsApproval=true." },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "Five live browser tests passed, including Agent approval, Contract v2 apply-and-run, prose recovery, persistent execution output, and benchmark telemetry UI." },
+    { "command": "live external harness approval/write/execute smoke test", "exitCode": 0, "summary": "pydantic-ai, crewai, microsoft-agent-framework, llamaindex, haystack and semantic-kernel each returned Contract v2 with one artifact and one execution; approval-bound write succeeded and the command exited 0." }
+  ],
+  "risks": [
+    "Provider readiness is validated against the current Compose runtime and configured model; a different deployment must rerun the live smoke test.",
+    "External framework packages remain thin native adapters around the common provider endpoint; provider-specific tool execution remains controlled by the Conductor companion, not by the model container."
+  ],
+  "followUps": [
+    "P1-T4 should keep the comparison UI and failure diagnostics aligned with the Contract v2 evidence fields.",
+    "P2-T2 remains required before concurrent mutating tasks can safely use isolated Git worktrees."
+  ]
+}

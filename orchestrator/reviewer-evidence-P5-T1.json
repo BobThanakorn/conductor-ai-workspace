@@ -1,0 +1,39 @@
+{
+  "taskId": "P5-T1",
+  "reviewer": "luna",
+  "decision": "approve",
+  "reviewedAt": "2026-08-09T13:48:00.000Z",
+  "findings": [],
+  "verified": {
+    "installationAuthentication": "GitHub App JWTs mint request-scoped installation tokens that are not returned, persisted, audited, or passed to companions.",
+    "repositoryAndPolicyValidation": "Repository enumeration, check runs, status contexts, and pull-request reviews use bounded pagination; publication revalidates protected branch, reviewed SHA, pull request, effective checks, and effective reviews before a reviewed-SHA merge.",
+    "publicationBoundary": "Legacy clone, remote Git actions, provider routes, UI actions, tool definitions, shared PAT variables, and companion Git credentials are retired. Companions are restricted to an internal network and execution uses a direct executable allowlist without a shell.",
+    "webhookBoundary": "GitHub webhook HMAC is computed over exact request bytes and deliveries are durably deduplicated without storing provider credentials or raw secrets.",
+    "proxyBoundary": "The same-origin proxy uses a fixed route and method allowlist, bounds request bodies, excludes cookies and authorization headers, forwards only content type plus the payload-bound approval header, and rejects retired publication routes before transport.",
+    "identityBoundary": "Installation repository discovery requires a server-verified platform principal or short-lived signed human identity scoped to the workspace."
+  },
+  "checks": [
+    {
+      "command": "npx tsx --test tests/companion-proxy.test.ts tests/github-app.test.ts tests/server-principal.test.ts companion/execution-plane.test.ts companion/github-publication-retirement.test.ts tests/agent-tool-adapter.test.ts",
+      "exitCode": 0,
+      "summary": "Independent focused security suite passed 26 of 26 tests."
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "summary": "Independent TypeScript validation passed."
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "summary": "Independent lint validation passed."
+    },
+    {
+      "command": "local proxy and Docker network inspection",
+      "exitCode": 0,
+      "summary": "Both companions were healthy on companion-private only; web used companion-private plus default; proxy health returned 200 and retired git/action returned 404."
+    }
+  ],
+  "releaseBlocker": "A real GitHub App protected-publication smoke remains blocked until an operator supplies GitHub App credentials and a disposable protected repository with required checks and review. No provider request or external mutation was performed during this review.",
+  "publication": "No commit, push, merge, pull request, deployment, secret rotation, or provider call was performed."
+}

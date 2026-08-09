@@ -1,0 +1,37 @@
+{
+  "summary": "Completed and live-validated the MCP permissions control center: durable workspace/agent policies, server-enforced default deny, workspace ceiling, immutable risk labels, invocation-time revocation and credential checks, append-only audit, and an accessible real-API Portal UI.",
+  "files": [
+    { "path": "lib/mcp-policy.ts", "change": "added", "purpose": "Durable policy evaluation, mutation, optimistic revision and invocation-time authorization" },
+    { "path": "app/api/mcp/policies/route.ts", "change": "added", "purpose": "Administrator-gated workspace and agent policy API" },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Expose only explicitly allowed read tools and recheck policy immediately before transport" },
+    { "path": "lib/mcp-registry.ts", "change": "modified", "purpose": "Default-deny runtime materialization and current allowlist/credential verification" },
+    { "path": "lib/environment-store.ts", "change": "modified", "purpose": "Runtime D1 policy tables, indexes and append-only triggers" },
+    { "path": "db/schema.ts", "change": "modified", "purpose": "Durable MCP policy schema" },
+    { "path": "drizzle/0006_cold_peter_quill.sql", "change": "added", "purpose": "Deployable policy tables and append-only triggers" },
+    { "path": "app/portal/mcp-permissions-panel.tsx", "change": "added", "purpose": "Real API-backed server lifecycle, scoped permission and audit UI" },
+    { "path": "app/portal/mcp-permissions.module.css", "change": "added", "purpose": "Accessible responsive MCP control center styling" },
+    { "path": "app/portal/page.tsx", "change": "modified", "purpose": "Keyboard-accessible MCP tab integration" },
+    { "path": "tests/mcp-policy.test.ts", "change": "added", "purpose": "Default deny, workspace ceiling and zero-transport revocation regressions" },
+    { "path": "tests/portal-live.spec.ts", "change": "modified", "purpose": "Live accessible MCP control-center browser flow" }
+  ],
+  "scopeExpansion": {
+    "reason": "Immediate revocation and durable least-privilege policy require shared MCP runtime and D1 schema enforcement beyond the declared Portal/API surface.",
+    "paths": ["lib/mcp-policy.ts", "lib/mcp-contract.ts", "lib/mcp-registry.ts", "lib/environment-store.ts", "db/schema.ts", "drizzle/0006_cold_peter_quill.sql", "tests/mcp-policy.test.ts"]
+  },
+  "checks": [
+    { "command": "node --import tsx --test tests/mcp-contract.test.ts tests/mcp-gateway.test.ts tests/mcp-registry.test.ts tests/mcp-policy.test.ts", "exitCode": 0, "summary": "21 MCP tests passed including zero transport after revoke, stale policy/server revision, removed allowlist, missing/rotated credential and agent deny." },
+    { "command": "fresh replay of drizzle/0000 through drizzle/0006", "exitCode": 0, "summary": "All seven migrations applied; five MCP tables and four append-only triggers were present." },
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "Independent TypeScript validation passed." },
+    { "command": "npm run lint", "exitCode": 0, "summary": "Independent ESLint validation passed." },
+    { "command": "npm test", "exitCode": 0, "summary": "Independent production build passed; 102 application tests passed with one opt-in skip and all 16 companion tests passed." },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "Independent serial Playwright run passed 7/7, including MCP control center, live agent approval/execution and benchmark telemetry." },
+    { "command": "live MCP policy lifecycle against rebuilt Compose/D1", "exitCode": 0, "summary": "44/44 tools initially denied; unauthenticated mutation 401; agent scope expansion 409; agent deny effective; stale revision 409; revoke/reconnect succeeded; final policies restored to inherit." },
+    { "command": "temporary administrator cleanup", "exitCode": 0, "summary": "Web recreated without the temporary MCP administrator token; API output contained no credential, authorization or argument patterns." }
+  ],
+  "risks": [
+    "Side-effecting MCP tools intentionally remain unavailable until a resumable payload-bound approval bridge exists.",
+    "An operator must configure MCP_ADMIN_TOKEN at runtime before changing policies; it is deliberately absent after smoke-test cleanup.",
+    "The MCP gateway image tag is addressed by P6-T1 production pinning."
+  ],
+  "followUps": ["P6-T1 pins and scans the MCP gateway image."]
+}

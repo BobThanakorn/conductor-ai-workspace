@@ -293,7 +293,9 @@ const EMPTY_TERMINAL_LINES = [
   { type: "pending", text: " Waiting for the local execution companion…" },
   { type: "summary", text: " No command has been executed." },
 ];
-const LOCAL_GIT_COMPANION = "http://127.0.0.1:8765";
+// Keep every browser surface on the same bounded server-side companion proxy;
+// the container itself is intentionally unreachable from the public network.
+const LOCAL_GIT_COMPANION = "/api/companion";
 
 function nowTime() {
   return new Intl.DateTimeFormat("en", {

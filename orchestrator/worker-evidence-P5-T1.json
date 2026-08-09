@@ -1,0 +1,67 @@
+{
+  "taskId": "P5-T1",
+  "workerId": "terra",
+  "status": "ready_for_independent_review",
+  "summary": "GitHub App publication is server-only and installation-scoped. Direct companion clone/publication and PAT paths are retired; companion execution is bounded, approval-gated, and isolated from Internet egress. Browser companion access is a same-origin, allowlisted proxy over the private Compose network.",
+  "changedFiles": [
+    "app/api/companion/[...path]/route.ts",
+    "app/api/github/repositories/route.ts",
+    "app/portal/page.tsx",
+    "lib/github-app.ts",
+    "lib/agent-tool-adapter.ts",
+    "companion/execution-plane.ts",
+    "companion/local-git-server.ts",
+    "compose.yaml",
+    "compose.github.yaml",
+    "compose.mcp.yaml",
+    "README.md",
+    "companion/README.md",
+    "secret.github-token.example (deleted)",
+    "tests/github-app.test.ts",
+    "tests/companion-proxy.test.ts",
+    "tests/portal-live.spec.ts",
+    "companion/execution-plane.test.ts",
+    "companion/github-publication-retirement.test.ts",
+    "tests/rendered-html.test.mjs"
+  ],
+  "files": [
+    "app/api/companion/[...path]/route.ts",
+    "app/api/github/repositories/route.ts",
+    "app/portal/page.tsx",
+    "lib/github-app.ts",
+    "lib/agent-tool-adapter.ts",
+    "companion/execution-plane.ts",
+    "companion/local-git-server.ts",
+    "compose.yaml",
+    "compose.github.yaml",
+    "compose.mcp.yaml",
+    "tests/github-app.test.ts",
+    "tests/companion-proxy.test.ts",
+    "companion/execution-plane.test.ts",
+    "companion/github-publication-retirement.test.ts"
+  ],
+  "acceptanceEvidence": {
+    "repositoryAuth": "GET /api/github/repositories derives workspace scope from the URL, requires authenticateServerPrincipal with the server signing secret, accepts no request-body actor, and only honors the platform user header when CONDUCTOR_TRUST_PLATFORM_IDENTITY=true. Focused tests cover signed human identity, unauthenticated rejection, and spoofed-header rejection.",
+    "installationScopedGitHubApp": "GitHubAppClient mints an RS256 GitHub App installation token inside the request path; token/private-key values are neither returned nor persisted. Installation repository selection and protected merge use that token only.",
+    "protectedPublication": "Publication refuses source=target/default branch, uses a payload-bound short-lived permit, refreshes protection/head/PR/effective checks/statuses/reviews immediately before merge, reconciles a matching already-merged retry only, and never falls back to push.",
+    "pagination": "Effective check runs, commit status contexts, PR reviews, and installation repositories use bounded page iteration. Focused tests require successful data on page 2 after 100 incomplete entries on page 1.",
+    "webhookAndAudit": "Webhook verification compares X-Hub-Signature-256 against the exact raw request bytes; durable delivery dedupe and raw-byte digest remain in place. Audit payloads exclude permit text, installation tokens, private keys, and provider response bodies.",
+    "retiredCredentialPaths": "Both companion services receive no GITHUB_TOKEN, GITLAB_TOKEN, github-token secret, PAT/OAuth injection, askpass credential, or GitHub App secret. App credentials are configured only on web in compose.github.yaml. Legacy /git/clone, /git/action, and /provider/github/* are retired; browser UI/tool adapter no longer expose git.remote, github.create-repository, clone, or PAT creation.",
+    "boundedExecution": "The execution plane uses direct execFile with an executable/argument allowlist, rejects shells, env wrappers, absolute executables, aliases, send-pack/push, node -e, and unsafe npm lifecycle scripts. Mutation routes retain payload-bound approval, fresh Contract v2 binding, and single-use approval consumption.",
+    "networkBoundary": "Companions attach only to internal:true companion-private. Web attaches to default plus companion-private. The same-origin proxy permits a small fixed route/method set, bounds POST bodies to 4.5 MB, forwards only content-type and X-Conductor-Approval, and rejects unknown and retired publication routes before transport. Tests cover the allowlist, approval-header forwarding, credential-header exclusion, and body limit."
+  },
+  "checks": [
+    { "command": "npx tsx --test tests/companion-proxy.test.ts tests/github-app.test.ts tests/server-principal.test.ts companion/execution-plane.test.ts companion/github-publication-retirement.test.ts tests/agent-tool-adapter.test.ts", "exitCode": 0, "summary": "26 focused tests passed: signed repository auth, installation pagination, protected permit/merge/reconciliation, raw webhook bytes, proxy allowlist/header/body bounds, retirement, and execution/network escape negatives." },
+    { "command": "npm test", "exitCode": 0, "summary": "Production build passed; 114 application tests passed, 0 failed, 1 opt-in harness skipped; 18 companion tests passed, 0 failed." },
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "TypeScript validation passed." },
+    { "command": "npm run lint", "exitCode": 0, "summary": "ESLint passed." },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "Playwright full local runtime suite passed 8/8, including bounded approval execution, provider benchmark, default-deny MCP controls, and authenticated Automations UI." },
+    { "command": "docker compose -f compose.yaml -f compose.github.yaml -f compose.mcp.yaml config", "exitCode": 0, "summary": "Compose configuration validated; output was handled as sensitive configuration and not retained in evidence." },
+    { "command": "live Docker boundary smoke", "exitCode": 0, "summary": "Both companions healthy; companion outbound HTTPS/DNS request was denied; web-to-companion private health returned 200; published localhost GET /api/companion/health returned 200; retired proxy POST /api/companion/git/action returned 404." }
+  ],
+  "externalSmoke": {
+    "status": "blocked_by_missing_operator_prerequisites",
+    "reason": "No configured GitHub App ID/private key/webhook/publication signing secret and no disposable repository with a protected target branch, required checks, and review are available. No provider call, pasted PAT, remote publication, or external mutation was attempted."
+  },
+  "publication": "No commit, push, merge, pull request, deployment, secret rotation, or external GitHub mutation was performed."
+}

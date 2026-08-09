@@ -15,6 +15,55 @@
       "when": 1785470578847,
       "tag": "0001_sweet_deadpool",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785728108280,
+      "tag": "0002_empty_falcon",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785730152515,
+      "tag": "0003_watery_wong",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786077764501,
+      "tag": "0004_smiling_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786078696407,
+      "tag": "0005_fair_psynapse",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786080748831,
+      "tag": "0006_cold_peter_quill",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786279744011,
+      "tag": "0007_steady_tomorrow_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786294705505,
+      "tag": "0008_perpetual_stone_men",
+      "breakpoints": true
     }
   ]
 }

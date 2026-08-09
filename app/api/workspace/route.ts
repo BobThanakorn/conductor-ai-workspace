@@ -16,6 +16,7 @@ import {
   executeWorkspaceAction,
   getDatabase,
   loadWorkspaceEvents,
+  loadTaskQueue,
   loadWorkspaceState,
   storeIdempotentError,
 } from "@/lib/environment-store";
@@ -44,8 +45,8 @@ function parseEventQuery(request: Request): {
 } {
   const params = new URL(request.url).searchParams;
   const view = params.get("view");
-  if (view && view !== "state" && view !== "events") {
-    throw new ApiError(400, "invalid_view", "view must be state or events.");
+  if (view && view !== "state" && view !== "events" && view !== "queue") {
+    throw new ApiError(400, "invalid_view", "view must be state, events, or queue.");
   }
 
   const rawAfter = params.get("afterSequence");
@@ -109,6 +110,13 @@ export async function GET(request: Request) {
     await ensureEnvironmentDatabase(database);
     const workspaceId = requestedWorkspaceId(request);
     const eventQuery = parseEventQuery(request);
+    const view = new URL(request.url).searchParams.get("view");
+    if (view === "queue") {
+      const limit = Number(new URL(request.url).searchParams.get("limit") ?? 50);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ApiError(400, "invalid_queue_limit", "limit must be between 1 and 100.");
+      const queue = await loadTaskQueue(database, workspaceId, limit);
+      return jsonResponse({ ok: true, workspaceId, ...queue });
+    }
     if (eventQuery.eventsOnly) {
       const page = await loadWorkspaceEvents(database, workspaceId, {
         afterSequence: eventQuery.afterSequence,

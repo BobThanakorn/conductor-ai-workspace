@@ -1,0 +1,32 @@
+{
+  "summary": "Implemented a server-only GitHub App publication path with installation-scoped tokens, paginated repository selection, exact-byte deduplicated webhooks, fresh protected-branch/check/review validation, signed-human payload permits, idempotent reviewed-SHA PR merge, and retirement of every companion PAT/direct-push bypass.",
+  "files": [
+    { "path": "lib/github-app.ts", "change": "added", "purpose": "GitHub App JWT, installation tokens, repository selection, policy validation, permits and protected merge" },
+    { "path": "app/api/github/repositories/route.ts", "change": "added", "purpose": "Server-authenticated installation repository selection" },
+    { "path": "app/api/github/webhook/route.ts", "change": "added", "purpose": "Raw-byte HMAC verification and durable delivery dedupe" },
+    { "path": "app/api/github/publication/permit/route.ts", "change": "added", "purpose": "Signed-human, fresh-policy publication permits" },
+    { "path": "app/api/github/publication/verify/route.ts", "change": "added", "purpose": "Verification-only fresh policy recheck" },
+    { "path": "app/api/github/publication/merge/route.ts", "change": "added", "purpose": "One-time idempotent protected PR merge with reviewed SHA" },
+    { "path": "companion/local-git-server.ts", "change": "modified", "purpose": "Retire legacy Git remote and provider publication routes" },
+    { "path": "companion/execution-plane.ts", "change": "modified", "purpose": "Reject terminal push and send-pack bypasses" },
+    { "path": "companion/container-entrypoint.sh", "change": "modified", "purpose": "Stop loading shared publication tokens" },
+    { "path": "companion/git-askpass.sh", "change": "modified", "purpose": "Disable legacy shared-token credential flow" },
+    { "path": "compose.github.yaml", "change": "modified", "purpose": "Server-only GitHub App runtime configuration" },
+    { "path": "tests/github-app.test.ts", "change": "added", "purpose": "JWT, pagination, checks/reviews, permits, merge and crash reconciliation tests" },
+    { "path": "companion/github-publication-retirement.test.ts", "change": "added", "purpose": "Actual HTTP retirement and push bypass tests" }
+  ],
+  "checks": [
+    { "command": "node --experimental-strip-types --test tests/github-app.test.ts", "exitCode": 0, "summary": "Nine focused GitHub App, pagination, policy, merge, reconciliation, permit and webhook tests passed." },
+    { "command": "tsx --test companion/github-publication-retirement.test.ts", "exitCode": 0, "summary": "Legacy /git/action returned 410 and push/send-pack bypass assertions passed." },
+    { "command": "npm run typecheck", "exitCode": 0, "summary": "Independent TypeScript validation passed." },
+    { "command": "npm run lint", "exitCode": 0, "summary": "Independent ESLint validation passed." },
+    { "command": "npm test", "exitCode": 0, "summary": "Independent production build passed; 102 application tests passed with one opt-in skip and all 16 companion tests passed." },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "Independent serial Playwright regression passed 7/7 against the rebuilt runtime." },
+    { "command": "live GitHub provider publication smoke", "exitCode": 2, "summary": "Blocked without a configured GitHub App ID/private key/webhook secret/publication signing secret and disposable protected repository; no remote mutation was attempted." }
+  ],
+  "risks": [
+    "Live provider behavior must be rerun after an operator creates and installs a GitHub App on a disposable repository with required checks and reviews.",
+    "No external merge was performed because publication remains separately human-controlled."
+  ],
+  "followUps": ["Configure a disposable GitHub App test installation and run the protected publication smoke before production release."]
+}

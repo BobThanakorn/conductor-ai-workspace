@@ -1,0 +1,58 @@
+{
+  "taskId": "P5-T2",
+  "reviewer": "luna",
+  "decision": "approve",
+  "reviewedAt": "2026-08-09T14:11:29.011Z",
+  "attempt": 2,
+  "verified": {
+    "pausedRuns": "Both direct run and replay load the owner/workspace-scoped automation and reject enabled != 1 with automation_paused before materialization.",
+    "snapshotUniqueness": "Each newly reserved run receives an independent cryptographic UUID snapshot ID. Lease recovery reuses only the already-reserved run's snapshot ID, while replay always uses a fresh run key and reservation.",
+    "scheduleReservationAndRecovery": "The scheduler materializes the exact enabled next_run_at slot before compare-and-swap advancement. The reservation INSERT is conditioned on that exact slot, and a pre-pass independently reclaims expired schedule:* materializer leases even after next_run_at has advanced.",
+    "webhookScopeBinding": "The HMAC input is workspace ID, newline, hook ID, newline, and the exact raw request bytes. A signature cannot be reused with another workspace, hook, or byte-different body.",
+    "cancellationRace": "Cancellation first performs a conditional run transition. Approval withdrawal, task cancellation, and audit insertion each require the same run ID to be cancelled at the exact transition timestamp; if completion wins, the transition changes zero rows and dependent mutations also change zero rows before the route returns 409.",
+    "identityAndApproval": "The API schema is strict and has no body actor. Human actions use the server-verified workspace-scoped principal, all owner queries bind the principal actor, and automation runs create planning tasks/proposals only with explicit human approval required before mutation, execution, or publication.",
+    "immutability": "Database triggers reject update and delete for automation profiles, events, and snapshots, and runs pin exact profile versions in an immutable snapshot manifest.",
+    "ui": "The Portal automation controls are API-backed and expose typed/versioned profiles, triggers, pause/resume, run history, cancel, and replay without a client-side auto-approval path."
+  },
+  "independentChecks": [
+    {
+      "command": "node --test --experimental-strip-types tests/automation-contract.test.ts tests/server-principal.test.ts tests/automation-behavior.test.mjs",
+      "exitCode": 0,
+      "summary": "10 tests passed, including the five corrected security and recovery boundaries."
+    },
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "summary": "TypeScript validation passed."
+    },
+    {
+      "command": "npm run lint",
+      "exitCode": 0,
+      "summary": "ESLint passed."
+    },
+    {
+      "command": "npm run db:generate",
+      "exitCode": 0,
+      "summary": "Drizzle read 20 tables and reported no schema changes."
+    }
+  ],
+  "inspectedWorkerEvidence": [
+    {
+      "command": "npm test",
+      "exitCode": 0,
+      "summary": "Fresh submitted evidence records the final production build, 117 passing application tests with one opt-in live harness skip, and 18 passing companion tests."
+    },
+    {
+      "command": "npm run test:e2e",
+      "exitCode": 0,
+      "summary": "Fresh submitted evidence records 8 of 8 Playwright tests passing; test-results/.last-run.json independently reports status passed with no failed tests."
+    },
+    {
+      "command": "temporary scheduler secret + Docker rebuild + npm run test:automation-live + secret removal/recreate",
+      "exitCode": 0,
+      "summary": "Submitted final live evidence covers idempotency, cancellation, fresh replay, paused run/replay denial, signed scheduler, workspace-and-hook-bound webhook, and cross-hook replay denial. It explicitly records removal of temporary secrets and final scheduler/webhook disabled state. The reviewer did not reuse credentials or rerun the secret-bearing smoke."
+    }
+  ],
+  "knownLimits": "The reviewed live proof is local Docker/D1 behavior. No external provider call or publication was required for P5-T2 and none was performed during review.",
+  "publication": "No credential use, provider call, commit, push, merge, publication, deployment, or product implementation change was performed by the reviewer."
+}

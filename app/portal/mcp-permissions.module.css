@@ -1,0 +1,283 @@
+.panel {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  padding-bottom: 40px;
+  color: #d6d6d6;
+}
+
+.heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 7px;
+  color: #85b991;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .14em;
+}
+
+.heading h1,
+.section h2,
+.auditColumns h3 {
+  margin: 0;
+  color: #ededed;
+}
+
+.heading h1 { font-size: 22px; }
+.heading p,
+.sectionHeading p {
+  max-width: 720px;
+  margin: 7px 0 0;
+  color: #9c9c9c;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.secondaryButton,
+.registrationForm button,
+.scopeControls button,
+.actions button {
+  min-height: 32px;
+  padding: 7px 11px;
+  border: 1px solid #4a4a4a;
+  border-radius: 6px;
+  color: #d8d8d8;
+  background: #2d2d2d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.secondaryButton:hover,
+.registrationForm button:hover,
+.scopeControls button:hover,
+.actions button:hover { border-color: #6a8f73; background: #26362a; }
+.secondaryButton:focus-visible,
+.registrationForm button:focus-visible,
+.scopeControls button:focus-visible,
+.actions button:focus-visible,
+.secretField input:focus-visible,
+.registrationForm select:focus-visible,
+.scopeControls input:focus-visible {
+  outline: 2px solid #75b383;
+  outline-offset: 2px;
+}
+
+.secondaryButton:disabled,
+.registrationForm button:disabled,
+.scopeControls button:disabled,
+.actions button:disabled { cursor: not-allowed; opacity: .48; }
+
+.defaultDeny {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 13px 15px;
+  border: 1px solid #6a5128;
+  border-radius: 8px;
+  color: #ead2a1;
+  background: #30291d;
+}
+
+.defaultDeny > span { margin-top: 1px; color: #d69e39; }
+.defaultDeny strong { font-size: 12px; }
+.defaultDeny p { margin: 4px 0 0; color: #c9b78f; font-size: 10px; line-height: 1.55; }
+
+.secretField {
+  display: grid;
+  grid-template-columns: minmax(150px, 210px) minmax(220px, 1fr);
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  background: #252526;
+  font-size: 11px;
+}
+
+.secretField input,
+.registrationForm select,
+.scopeControls input:not([type="radio"]) {
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #494949;
+  border-radius: 6px;
+  color: #ededed;
+  background: #1e1e1e;
+  font: 11px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.secretField small {
+  grid-column: 2;
+  color: #969696;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.error,
+.notice {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: 7px;
+  font-size: 11px;
+}
+.error { border-color: #7b453d; color: #f1b0a6; background: #3a2522; }
+.notice { border-color: #3f6749; color: #b7dfbf; background: #213327; }
+
+.section {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #3b3b3b;
+  border-radius: 9px;
+  background: #252526;
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.sectionHeading h2 { font-size: 15px; }
+.sectionHeading > span {
+  flex: none;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #aab4aa;
+  background: #323532;
+  font-size: 9px;
+}
+
+.registrationForm {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #3c3c3c;
+  border-radius: 7px;
+  background: #202020;
+}
+.registrationForm label { min-width: 0; flex: 1; display: grid; gap: 5px; color: #aaa; font-size: 9px; }
+.registrationForm button { border-color: #3f704b; color: #bde1c4; background: #253a2a; }
+
+.serverGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.serverCard {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #414141;
+  border-radius: 8px;
+  background: #202020;
+}
+.serverCard > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.serverCard > header div { min-width: 0; }
+.serverCard strong { display: block; font-size: 12px; }
+.serverCard code { color: #a7aca7; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.serverCard dl { display: grid; gap: 5px; margin: 12px 0; }
+.serverCard dl div { display: flex; justify-content: space-between; gap: 12px; font-size: 9px; }
+.serverCard dt { color: #939393; }
+.serverCard dd { margin: 0; color: #ccc; text-align: right; }
+
+.status,
+.risk,
+.approval,
+.readOnly,
+.allowed,
+.denied {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 9px;
+  line-height: 1.2;
+}
+.connected, .allowed { border-color: #3f704b; color: #a9d7b3; background: #203327; }
+.registered, .disconnected { border-color: #58606c; color: #bcc5d2; background: #282d34; }
+.unavailable, .revoked, .denied { border-color: #70443e; color: #e0aaa1; background: #382522; }
+
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.actions span { color: #999; font-size: 9px; }
+.actions .dangerButton { border-color: #70443e; color: #e0aaa1; background: #382522; }
+
+.scopeControls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 13px;
+  padding: 10px;
+  border: 1px solid #3c3c3c;
+  border-radius: 7px;
+  background: #202020;
+}
+.scopeControls fieldset { display: flex; gap: 12px; margin: 0; padding: 0; border: 0; }
+.scopeControls legend { margin-bottom: 6px; color: #aaa; font-size: 9px; }
+.scopeControls fieldset label { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.scopeControls input[type="radio"] { accent-color: #63a272; }
+.scopeControls form { display: flex; align-items: flex-end; gap: 7px; }
+.scopeControls form label { display: grid; gap: 5px; color: #aaa; font-size: 9px; }
+
+.toolList { display: grid; gap: 9px; }
+.toolCard { padding: 12px; border: 1px solid #414141; border-radius: 8px; background: #202020; }
+.toolSummary { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.toolSummary > div:first-child { min-width: 0; }
+.toolSummary strong { display: block; color: #e0e0e0; font-size: 12px; }
+.toolSummary code { color: #9fa99f; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.risk_read { border-color: #446b4d; color: #acd6b5; background: #213328; }
+.risk_write { border-color: #6e5b36; color: #e0c483; background: #342d20; }
+.risk_execute { border-color: #775143; color: #e4b29e; background: #3a2923; }
+.risk_external { border-color: #665082; color: #cbb6e4; background: #30283b; }
+.approval { border-color: #795d2e; color: #e7c57e; background: #352d1f; }
+.readOnly { border-color: #475767; color: #b8c8d8; background: #252d35; }
+.toolCard > p { margin: 9px 0; color: #aaa; font-size: 10px; line-height: 1.5; }
+.provenance { display: flex; align-items: center; gap: 8px; color: #8d938d; font-size: 9px; }
+.provenance code { color: #a9c9af; overflow-wrap: anywhere; }
+.decisionGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 11px 0; overflow: hidden; border: 1px solid #393939; border-radius: 6px; background: #393939; }
+.decisionGrid div { min-width: 0; padding: 7px; background: #262626; }
+.decisionGrid dt { color: #8f8f8f; font-size: 8px; }
+.decisionGrid dd { margin: 3px 0 0; color: #ccc; font-size: 9px; overflow-wrap: anywhere; }
+
+.auditColumns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.auditColumns h3 { margin-bottom: 9px; font-size: 11px; }
+.auditList { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.auditList li { position: relative; display: flex; gap: 9px; min-height: 48px; padding-bottom: 8px; }
+.auditList li:not(:last-child)::before { content: ""; position: absolute; top: 12px; bottom: 0; left: 4px; width: 1px; background: #454545; }
+.auditMarker { z-index: 1; width: 7px; height: 7px; margin-top: 4px; border: 1px solid #6fa17a; border-radius: 50%; background: #253a2a; }
+.auditList div { min-width: 0; }
+.auditList strong, .auditList span, .auditList time { display: block; overflow-wrap: anywhere; }
+.auditList strong { color: #d1d1d1; font-size: 10px; }
+.auditList span { margin-top: 3px; color: #9d9d9d; font-size: 9px; }
+.auditList time { margin-top: 3px; color: #777; font-size: 8px; }
+.empty { margin: 10px 0 0; color: #909090; font-size: 10px; }
+
+@media (max-width: 850px) {
+  .heading, .sectionHeading { align-items: stretch; flex-direction: column; }
+  .secondaryButton { align-self: flex-start; }
+  .secretField { grid-template-columns: 1fr; }
+  .secretField small { grid-column: 1; }
+  .scopeControls { align-items: stretch; flex-direction: column; }
+  .scopeControls form { align-items: stretch; flex-direction: column; }
+  .decisionGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .auditColumns { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 520px) {
+  .panel { padding-bottom: 20px; }
+  .section { padding: 12px; }
+  .registrationForm { align-items: stretch; flex-direction: column; }
+  .serverGrid { grid-template-columns: 1fr; }
+  .toolSummary { flex-direction: column; }
+  .badges { justify-content: flex-start; }
+  .decisionGrid { grid-template-columns: 1fr; }
+}

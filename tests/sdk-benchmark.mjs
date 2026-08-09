@@ -5,6 +5,7 @@ const baseUrl = (process.env.BENCHMARK_BASE_URL || "http://127.0.0.1:3000").repl
 const iterations = Math.max(1, Math.min(10, Number(process.env.BENCHMARK_ITERATIONS || 3)));
 const prompt = process.env.BENCHMARK_PROMPT ||
   "In Ask mode, explain in one sentence what this repository does. Do not modify files or run commands.";
+const companionUrl = (process.env.BENCHMARK_COMPANION_URL || "http://127.0.0.1:8765").replace(/\/$/, "");
 
 const modelsResponse = await fetch(`${baseUrl}/api/models`);
 if (!modelsResponse.ok) throw new Error(`Model discovery failed (${modelsResponse.status}).`);
@@ -16,6 +17,21 @@ const readyEngines = (modelsPayload.engines || [])
   .filter((engine) => engine.status === "ready")
   .map((engine) => engine.id);
 if (!readyEngines.length) throw new Error("No ready Agent engine is available.");
+
+let workspaceFiles = [];
+try {
+  const contextResponse = await fetch(`${companionUrl}/context/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: prompt, maxFiles: 8, maxTokens: 12_000 }),
+  });
+  if (contextResponse.ok) {
+    const contextPayload = await contextResponse.json();
+    workspaceFiles = Array.isArray(contextPayload.files) ? contextPayload.files : [];
+  }
+} catch {
+  // Offline benchmark runs can still exercise provider behavior without grounding.
+}
 
 const results = [];
 for (const engine of readyEngines) {
@@ -35,7 +51,7 @@ for (const engine of readyEngines) {
         model,
         workspaceId: "workspace_local",
         idempotencyKey: key,
-        workspaceFiles: [],
+        workspaceFiles,
         workspace: {
           repository: "workspace",
           branch: "main",
@@ -92,6 +108,7 @@ const report = {
   model,
   prompt,
   iterations,
+  context: { files: workspaceFiles.map((file) => file.path), count: workspaceFiles.length },
   summary,
   results,
 };

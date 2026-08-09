@@ -1,30 +1,47 @@
 services:
   web:
     environment:
-      MCP_GATEWAY_URL: http://mcp-gateway:8811
+      MCP_GATEWAY_URL: http://mcp-gateway:8811/mcp
+      MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-}
+      MCP_GATEWAY_AUTH_TOKEN: ${MCP_GATEWAY_AUTH_TOKEN:-}
+      MCP_SERVER_ALLOWLIST: ${MCP_SERVER_ALLOWLIST:-}
     depends_on:
       mcp-gateway:
         condition: service_started
 
   agent-langgraph:
     environment:
-      MCP_GATEWAY_URL: http://mcp-gateway:8811
+      MCP_GATEWAY_URL: http://mcp-gateway:8811/mcp
     depends_on:
       mcp-gateway:
         condition: service_started
 
   mcp-gateway:
-    image: docker/mcp-gateway:latest
+    # The gateway is included only in the operational full/benchmark profiles.
+    profiles: ["full", "benchmark"]
+    networks:
+      - default
+      - companion-private
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp-gateway
+    image: ${CONDUCTOR_MCP_GATEWAY_IMAGE:-conductor-mcp-gateway:2026.08.09}
     use_api_socket: true
+    environment:
+      MCP_GATEWAY_AUTH_TOKEN: ${MCP_GATEWAY_AUTH_TOKEN:?Set MCP_GATEWAY_AUTH_TOKEN in .env}
     command:
       - --transport=streaming
-      - --secrets=docker-desktop:/run/secrets/mcp_secret
+      - --host=0.0.0.0
+      - --port=8811
+      - --secrets=/run/secrets/mcp_secret
       - --servers=github-official
     secrets:
       - mcp_secret
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    cap_drop: ["ALL"]
+    read_only: true
 
 secrets:
   mcp_secret:

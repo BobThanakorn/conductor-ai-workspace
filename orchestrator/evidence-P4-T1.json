@@ -1,0 +1,19 @@
+{
+  "summary": "Added an incremental, symbol-aware repository index and deterministic hybrid retrieval with path/symbol/content scoring, snapshot provenance, generated/secret exclusion, redaction, strict token-budget truncation, file/chunk limits, and an explicit context manifest. The companion now inventories the selected repository server-side through /context/search, and the portal/benchmark use that inventory instead of relying on the browser's visible eight files.",
+  "files": [
+    { "path": "lib/repository-index.ts", "change": "added", "purpose": "Incremental indexer, chunk provenance, secret/generated exclusion, hybrid retrieval and token budgeting" },
+    { "path": "app/api/agent/route.ts", "change": "modified", "purpose": "Retrieve relevant context before dispatch and expose contextManifest/audit provenance" },
+    { "path": "companion/local-git-server.ts", "change": "modified", "purpose": "Provide bounded server-side repository inventory and context retrieval" },
+    { "path": "app/portal/page.tsx", "change": "modified", "purpose": "Use companion context search before browser fallback" },
+    { "path": "tests/repository-index.test.ts", "change": "added", "purpose": "Exclusion, chunk provenance, ranking, redaction, strict token budget and incremental reuse tests" },
+    { "path": "tests/sdk-benchmark.mjs", "change": "modified", "purpose": "Ground live benchmark requests with companion context" }
+  ],
+  "checks": [
+    { "command": "npm test", "exitCode": 0, "summary": "Build plus 64 application tests and 10 companion tests passed" },
+    { "command": "npm run benchmark:agents", "exitCode": 0, "summary": "Live benchmark completed one Ask run for all eight ready engines with eight non-empty repository context files" },
+    { "command": "POST http://127.0.0.1:8765/context/search", "exitCode": 0, "summary": "Companion indexed 196 inventory files and returned non-empty context under a 12000-token budget" },
+    { "command": "npm run test:e2e", "exitCode": 0, "summary": "Five browser tests passed with repository-grounded benchmark context" }
+  ],
+  "risks": ["The index cache is isolate-local and bounded to eight workspaces; a multi-instance deployment should move the index/chunk manifest to durable storage or a shared index service."],
+  "followUps": ["P1-T4 should render contextManifest provenance and token budget beside the existing benchmark metrics." ]
+}

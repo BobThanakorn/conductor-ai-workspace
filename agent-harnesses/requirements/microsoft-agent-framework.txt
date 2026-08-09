@@ -1,4 +1,6 @@
-fastapi>=0.115,<1
-uvicorn[standard]>=0.34,<1
-agent-framework>=1.13,<2
-openai>=2.0,<3
+# The adapter imports Agent/ChatResponse/Message from the core package only.
+# This avoids the umbrella package's unrelated all-provider extra graph.
+fastapi==0.138.0
+uvicorn[standard]==0.52.1
+agent-framework-core==1.13.0
+openai==2.53.0

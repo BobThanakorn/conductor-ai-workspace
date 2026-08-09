@@ -11,4 +11,12 @@ dist
 secret.*
 work
 coverage
+artifacts
+test-results
+.conductor
+workspace
+**/__pycache__
+tsconfig.tsbuildinfo
+orchestrator/state.json
+orchestrator/*evidence*.json
 npm-debug.log*

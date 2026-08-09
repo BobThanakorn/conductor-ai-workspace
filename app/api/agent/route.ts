@@ -19,30 +19,44 @@ import {
   persistAgentRun,
   storeIdempotentError,
 } from "@/lib/environment-store";
+import { ensureOperationsSchema, quotaLimit, reserveQuota, traceId } from "@/lib/operations";
 import {
   agentProposalSchema,
   assessAgentProposal,
   formatUntrustedUserRequest,
   formatUntrustedWorkspaceFiles,
+  recoverExplicitArtifact,
+  recoverExplicitCommandBatch,
   type AgentProposal,
 } from "@/lib/agent-safety";
 import {
   AgentProviderConfigurationError,
-  normalizeMcpGatewayUrl,
   resolveAgentRuntimeConfig,
   resolveAgentRuntimeConfigForModel,
   resolveAgentModelOptions,
   type AgentRuntimeConfig,
 } from "@/lib/agent-provider";
+import {
+  assertMcpRuntimeServerCurrent,
+  loadEnabledMcpRuntime,
+  type McpRegistryBindings,
+} from "@/lib/mcp-registry";
+import type { McpRuntimeServer } from "@/lib/mcp-contract";
+import { authorizeMcpToolInvocation, invokePolicyCheckedMcpTool } from "@/lib/mcp-policy";
 import { runLangGraphAgent } from "@/lib/langgraph-agent";
 import { runExternalHarness } from "@/lib/external-harness";
+import { normalizeAgentToolEvents } from "@/lib/agent-tools";
 import {
   emptyTokenUsage,
   type AgentTelemetry,
   type AgentToolUse,
 } from "@/lib/agent-telemetry";
+import { buildAgentContractV2, type AgentContractV2 } from "@/lib/agent-contract";
+import { retrieveRepositoryContext, updateRepositoryIndex, type RepositoryIndex } from "@/lib/repository-index";
 
 export const dynamic = "force-dynamic";
+
+const repositoryIndexCache = new Map<string, RepositoryIndex>();
 
 type AgentOutput = AgentProposal;
 
@@ -55,10 +69,19 @@ async function runLiveAgent(
     ReturnType<typeof agentRequestSchema.parse>["workspaceFiles"]
   >,
   workspaceIdentity: ReturnType<typeof agentRequestSchema.parse>["workspace"],
-  mcpGatewayUrl?: string,
+  mcpRuntime: {
+    servers: McpRuntimeServer[];
+    denied: Array<{ serverId: string; code: string }>;
+  },
+  mcpPolicyContext: {
+    database: D1Database;
+    workspaceId: string;
+    agentId: string;
+    bindings: McpRegistryBindings;
+  },
 ): Promise<{ output: AgentOutput; telemetry: Omit<AgentTelemetry, "durationMs" | "auditLog"> & { durationMs: number } }> {
   const started = performance.now();
-  const { Agent, MCPServerStreamableHttp, OpenAIProvider, Runner } = await import("@openai/agents");
+  const { Agent, MCPServerStreamableHttp, OpenAIProvider, Runner, mcpToFunctionTool } = await import("@openai/agents");
   const provider = new OpenAIProvider({
     apiKey: runtime.apiKey,
     ...(runtime.baseURL ? { baseURL: runtime.baseURL } : {}),
@@ -66,16 +89,108 @@ async function runLiveAgent(
   });
   const customOpenAICompatibleProvider = runtime.provider === "openai" && Boolean(runtime.baseURL);
 
-  const mcpServer = mcpGatewayUrl
-    ? new MCPServerStreamableHttp({
-        url: mcpGatewayUrl,
-        name: "docker-mcp-gateway",
-        cacheToolsList: true,
-        timeout: 8_000,
-        toolFilter: async (_context, tool) => /^(get|list|read|search|fetch|inspect|view|query)_?/i.test(tool.name),
-      })
-    : undefined;
-  if (mcpServer) await mcpServer.connect();
+  const connectedMcpServers: InstanceType<typeof MCPServerStreamableHttp>[] = [];
+  const protectedMcpTools: Array<ReturnType<typeof mcpToFunctionTool>> = [];
+  const mcpConnectionTools: AgentToolUse[] = mcpRuntime.denied.map((denied) => ({
+    name: `mcp.${denied.serverId}.${denied.code}`,
+    status: "failed",
+    source: "mcp",
+    risk: "read",
+    approved: false,
+  }));
+  for (const configuredServer of mcpRuntime.servers) {
+    const allowedToolNames = new Set(configuredServer.tools.map((tool) => tool.name));
+    const server = new MCPServerStreamableHttp({
+      url: configuredServer.url,
+      name: configuredServer.id,
+      cacheToolsList: true,
+      timeout: 8_000,
+      ...(configuredServer.authorization
+        ? { requestInit: { headers: { Authorization: configuredServer.authorization } } }
+        : {}),
+      toolFilter: async (_context, tool) => allowedToolNames.has(tool.name),
+    });
+    try {
+      await server.connect();
+      connectedMcpServers.push(server);
+      for (const descriptor of configuredServer.tools) {
+        const properties = descriptor.inputSchema.properties;
+        const required = descriptor.inputSchema.required;
+        const additionalProperties = descriptor.inputSchema.additionalProperties;
+        const converted = mcpToFunctionTool(
+          {
+            name: descriptor.name,
+            description: descriptor.description ?? descriptor.title ?? "Policy-controlled MCP read tool",
+            inputSchema: {
+              type: "object",
+              properties: properties && typeof properties === "object" && !Array.isArray(properties)
+                ? properties as Record<string, unknown>
+                : {},
+              required: Array.isArray(required)
+                ? required.filter((value): value is string => typeof value === "string")
+                : [],
+              additionalProperties: typeof additionalProperties === "boolean"
+                ? additionalProperties
+                : false,
+            },
+          },
+          server,
+          true,
+          {
+            toolNameOverride: `mcp_${configuredServer.id}_${descriptor.name}`
+              .replace(/[^A-Za-z0-9_-]/g, "_")
+              .slice(0, 64),
+          },
+        );
+        const invoke = converted.invoke;
+        protectedMcpTools.push({
+          ...converted,
+          // Only read tools reach this point. Mutation tools remain unexposed
+          // until the application has a resumable payload-bound approval bridge.
+          needsApproval: async () => false,
+          invoke: async (runContext, toolInput, details) =>
+            invokePolicyCheckedMcpTool({
+              authorize: async () => {
+                await authorizeMcpToolInvocation({
+                  database: mcpPolicyContext.database,
+                  workspaceId: mcpPolicyContext.workspaceId,
+                  agentId: mcpPolicyContext.agentId,
+                  serverId: configuredServer.id,
+                  toolName: descriptor.name,
+                  expectedServerRevision: descriptor.serverRevision,
+                  expectedPolicyRevision: descriptor.policyRevision,
+                });
+                await assertMcpRuntimeServerCurrent({
+                  database: mcpPolicyContext.database,
+                  workspaceId: mcpPolicyContext.workspaceId,
+                  server: configuredServer,
+                  bindings: mcpPolicyContext.bindings,
+                });
+              },
+              transport: () => invoke(runContext, toolInput, details),
+            }),
+        });
+      }
+      mcpConnectionTools.push({
+        name: `mcp.${configuredServer.id}.connect`,
+        status: "completed",
+        source: "mcp",
+        risk: "read",
+        approved: false,
+      });
+    } catch {
+      // A gateway outage disables that MCP path without blocking a model-only
+      // answer. No configured MCP tool is exposed unless connection succeeds.
+      mcpConnectionTools.push({
+        name: `mcp.${configuredServer.id}.connect`,
+        status: "failed",
+        source: "mcp",
+        risk: "read",
+        approved: false,
+      });
+      await server.close().catch(() => undefined);
+    }
+  }
 
   const agent = new Agent({
     name: "Conductor coding agent",
@@ -106,8 +221,7 @@ async function runLiveAgent(
         ? { providerData: { chat_template_kwargs: { enable_thinking: false } } }
         : {}),
     },
-    mcpServers: mcpServer ? [mcpServer] : [],
-    mcpConfig: { includeServerInToolNames: true, convertSchemasToStrict: true },
+    tools: protectedMcpTools,
   });
 
   const prompt = [
@@ -135,7 +249,7 @@ async function runLiveAgent(
             "Retry once with concise complete artifacts, no more than eight files, no more than twelve plan steps, and exactly one bounded verification command.",
           ].join("\n");
       try {
-        const result = await runner.run(agent, attemptPrompt, { maxTurns: mcpServer ? 4 : 2 });
+        const result = await runner.run(agent, attemptPrompt, { maxTurns: protectedMcpTools.length ? 4 : 2 });
         const usage = result.runContext.usage;
         const tools = result.newItems.flatMap((item): AgentToolUse[] => {
           if (!item.type.toLowerCase().includes("tool")) return [];
@@ -158,7 +272,7 @@ async function runLiveAgent(
               outputTokens: usage.outputTokens,
               totalTokens: usage.totalTokens,
             },
-            tools,
+            tools: [...mcpConnectionTools, ...tools],
           },
         };
       } catch (error) {
@@ -167,7 +281,7 @@ async function runLiveAgent(
     }
     throw lastError;
   } finally {
-    await mcpServer?.close().catch(() => undefined);
+    await Promise.all(connectedMcpServers.map((server) => server.close().catch(() => undefined)));
   }
 }
 
@@ -182,6 +296,11 @@ function errorBody(error: unknown): { ok: false; error: Record<string, unknown> 
 }
 
 export async function POST(request: Request) {
+  const operationTraceId = traceId(request);
+  const withTrace = (response: Response) => {
+    response.headers.set("x-conductor-trace-id", operationTraceId);
+    return response;
+  };
   let database: D1Database | undefined;
   let scope: string | undefined;
   let idempotencyKey: string | undefined;
@@ -206,7 +325,7 @@ export async function POST(request: Request) {
       idempotencyKey,
       await digest(canonicalRequest(input)),
     );
-    if (claim.kind === "replay") return jsonResponse(claim.body, claim.status);
+    if (claim.kind === "replay") return withTrace(jsonResponse(claim.body, claim.status));
     if (claim.kind === "conflict") {
       throw new ApiError(409, "idempotency_key_conflict", "This idempotency key was already used for a different request.");
     }
@@ -214,8 +333,29 @@ export async function POST(request: Request) {
       throw new ApiError(409, "request_in_progress", "An agent request with this idempotency key is still running.");
     }
     ownerToken = claim.ownerToken;
+    await ensureOperationsSchema(database);
+    await reserveQuota(database, {
+      workspaceId,
+      actorId: "agent:request",
+      traceId: operationTraceId,
+      bucket: "agent",
+      limit: quotaLimit(process.env.CONDUCTOR_AGENT_QUOTA_PER_MINUTE, 60),
+    });
 
     const context = await loadAgentContext(database, workspaceId, input.taskId);
+    const snapshotId = input.workspace?.headSha ?? context.workspace.baseSha ?? "unavailable";
+    const indexCacheKey = workspaceId;
+    const repositoryIndex = updateRepositoryIndex(
+      repositoryIndexCache.get(indexCacheKey),
+      input.workspaceFiles ?? [],
+      snapshotId,
+    );
+    repositoryIndexCache.set(indexCacheKey, repositoryIndex);
+    while (repositoryIndexCache.size > 8) repositoryIndexCache.delete(repositoryIndexCache.keys().next().value as string);
+    const retrievedContext = retrieveRepositoryContext(repositoryIndex, input.message);
+    const workspaceFilesForAgent = retrievedContext.files.length > 0
+      ? retrievedContext.files
+      : input.workspaceFiles ?? [];
     const environmentBindings = getEnvironmentBindings();
     let runtime: AgentRuntimeConfig;
     try {
@@ -243,7 +383,7 @@ export async function POST(request: Request) {
     let providerDurationMs = 0;
     let tokenUsage = emptyTokenUsage();
     let tools: AgentToolUse[] = [];
-    let engineAuditLog: AgentTelemetry["auditLog"] = [];
+  let engineAuditLog: AgentTelemetry["auditLog"] = [];
     try {
       if (["pydantic-ai", "crewai", "microsoft-agent-framework", "llamaindex", "haystack", "semantic-kernel"].includes(input.engine)) {
         const serviceUrls = {
@@ -262,9 +402,10 @@ export async function POST(request: Request) {
           engine: externalEngine,
           runtime,
           message: input.message,
-          workspaceFiles: input.workspaceFiles ?? [],
+          mode: input.mode,
+          workspaceFiles: workspaceFilesForAgent,
         });
-        output = {
+        output = result.proposal ?? {
           summary: result.answer ?? "",
           plan: [],
           proposedAction: "read_only_answer",
@@ -277,7 +418,7 @@ export async function POST(request: Request) {
         };
         providerDurationMs = result.metrics?.durationMs ?? 0;
         tokenUsage = result.metrics?.tokenUsage ?? emptyTokenUsage();
-        tools = result.metrics?.tools ?? [];
+        tools = result.metrics?.tools ?? [{ name: `${input.engine}.run`, status: "completed" }];
         engineAuditLog = [{
           at: new Date().toISOString(),
           stage: `${input.engine}.completed`,
@@ -304,7 +445,7 @@ export async function POST(request: Request) {
             workspaceId,
             taskId: input.taskId,
             runId: idempotencyKey,
-            workspaceFiles: input.workspaceFiles ?? [],
+            workspaceFiles: workspaceFilesForAgent,
             workspace: input.workspace ?? {
               repository: context.workspace.repository,
               branch: context.workspace.activeBranch,
@@ -325,14 +466,36 @@ export async function POST(request: Request) {
           metrics: result.metrics,
         };
       } else {
+        let mcpRuntime: Awaited<ReturnType<typeof loadEnabledMcpRuntime>>;
+        try {
+          mcpRuntime = await loadEnabledMcpRuntime(
+            database,
+            workspaceId,
+            environmentBindings as unknown as McpRegistryBindings,
+            input.engine,
+          );
+        } catch {
+          // Registry/configuration failures disable only MCP. The model may
+          // still answer without tools, and the telemetry records the denial.
+          mcpRuntime = {
+            servers: [],
+            denied: [{ serverId: "registry", code: "mcp_registry_unavailable" }],
+          };
+        }
         const result = await runLiveAgent(
           runtime,
           input.message,
           input.mode,
           context,
-          input.workspaceFiles ?? [],
+          workspaceFilesForAgent,
           input.workspace,
-          normalizeMcpGatewayUrl(environmentBindings.MCP_GATEWAY_URL),
+          mcpRuntime,
+          {
+            database,
+            workspaceId,
+            agentId: input.engine,
+            bindings: environmentBindings as unknown as McpRegistryBindings,
+          },
         );
         output = result.output;
         providerDurationMs = result.telemetry.durationMs;
@@ -360,14 +523,62 @@ export async function POST(request: Request) {
       };
     }
 
+    if (input.mode === "agent") {
+      // If the user supplied explicit bounded command lines, bind those exact
+      // lines instead of trusting a framework to paraphrase or escape them.
+      const recoveredExecutions = recoverExplicitCommandBatch(input.message);
+      if (recoveredExecutions.length) {
+        output = {
+          ...output,
+          summary: `${output.summary} A reviewed command batch was reconstructed from the exact commands in your request.`,
+          execution: null,
+          executions: recoveredExecutions,
+          riskLevel: "R1",
+          needsApproval: true,
+        };
+      }
+    }
+
+    const recoveredArtifact = input.mode === "agent" && output.artifacts.length === 0
+      ? recoverExplicitArtifact(input.message)
+      : [];
+    if (recoveredArtifact.length) {
+      output = {
+        ...output,
+        summary: `${output.summary} A reviewed file draft was reconstructed from the explicit file request.`,
+        artifacts: recoveredArtifact,
+        riskLevel: "R1",
+        needsApproval: true,
+      };
+    }
+
     const assessment = assessAgentProposal(output);
     output = assessment.proposal;
+    const agentContract: AgentContractV2 = buildAgentContractV2({
+      runId: idempotencyKey,
+      framework: input.engine,
+      model: configuredModel,
+      mode: input.mode,
+      workspaceId,
+      taskId: input.taskId,
+      snapshot: {
+        repository: input.workspace?.repository ?? context.workspace.repository,
+        path: input.workspace?.path,
+        branch: input.workspace?.branch ?? context.workspace.activeBranch,
+        headSha: input.workspace?.headSha ?? context.workspace.baseSha,
+      },
+      proposal: output,
+    });
+    if (agentContract.approval.required && !input.taskId) {
+      throw new ApiError(409, "task_required_for_mutation", "Create or select a task before requesting a file, terminal, Git, or external mutation.");
+    }
+    output = agentContract.proposal;
     const completedAt = new Date().toISOString();
     const telemetry: AgentTelemetry = {
       durationMs: Math.round(performance.now() - requestStarted),
       providerDurationMs,
       tokenUsage,
-      tools,
+      tools: normalizeAgentToolEvents(tools),
       auditLog: [
         {
           at: requestStartedAt,
@@ -377,7 +588,7 @@ export async function POST(request: Request) {
         {
           at: requestStartedAt,
           stage: "agent.context.loaded",
-          detail: `Loaded workspace context with ${input.workspaceFiles?.length ?? 0} attached file(s).`,
+          detail: `Retrieved ${retrievedContext.manifest.selectedChunks} chunk(s) from ${retrievedContext.manifest.selectedFiles.length} file(s) under snapshot ${retrievedContext.manifest.snapshotId}.`,
         },
         ...engineAuditLog,
         {
@@ -413,13 +624,14 @@ export async function POST(request: Request) {
           message: input.message,
           mode: input.mode,
           context,
-          workspaceFiles: input.workspaceFiles ?? [],
+          workspaceFiles: workspaceFilesForAgent,
         }),
       ),
       output,
       question: input.message,
       engine: input.engine,
       telemetry,
+      approvalPayload: agentContract.mutation,
     });
 
     await database
@@ -436,16 +648,19 @@ export async function POST(request: Request) {
       .run()
       .catch(() => undefined);
 
-    return jsonResponse({
+    return withTrace(jsonResponse({
       ...persisted,
       engine: input.engine,
       orchestration,
+      contractVersion: agentContract.contractVersion,
+      agentContract,
       telemetry,
       proposalPolicy: {
         normalized: assessment.normalized,
         reasons: assessment.reasons,
       },
-    });
+      contextManifest: retrievedContext.manifest,
+    }));
   } catch (error) {
     console.error(
       "Agent route failed",
@@ -462,6 +677,6 @@ export async function POST(request: Request) {
         body,
       ).catch(() => undefined);
     }
-    return errorResponse(error);
+    return withTrace(errorResponse(error));
   }
 }
