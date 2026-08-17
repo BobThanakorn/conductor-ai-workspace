@@ -14,8 +14,8 @@ The worktree is intentionally dirty and contains the accumulated project work pl
 
 - 14 roadmap tasks completed.
 - `P6-T2 Operations, recovery and release gate` is the only unfinished task.
-- P6-T2 remains `claimed` by worker profile `terra` and has not been submitted for review.
-- Independent review is mandatory before P6-T2 can be marked complete.
+- P6-T2 was implemented and submitted by worker profile `luna`, then independently approved by `codex`.
+- The roadmap now reports all 15 tasks completed.
 
 ## Completed system capabilities
 
@@ -160,7 +160,7 @@ After the live smoke and evidence file are complete:
 
 ```powershell
 npm run release:gate
-npm run orchestrator -- submit P6-T2 --worker terra --evidence orchestrator/worker-evidence-P6-T2.json
+npm run orchestrator -- submit P6-T2 --worker luna --evidence orchestrator/worker-evidence-P6-T2.json
 ```
 
 An independent reviewer must then inspect the evidence and use the orchestrator review command. The implementer must not approve its own task.

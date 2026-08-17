@@ -23,13 +23,12 @@ function isSafeArtifactPath(path: string): boolean {
   }
 
   const segments = path.split("/");
-  return segments.every(
-    (segment) =>
-      segment.length > 0 &&
-      segment !== "." &&
-      segment !== ".." &&
-      /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(segment),
-  );
+  return segments.every((segment) => {
+    if (!segment || segment === "." || segment === "..") return false;
+    if (/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(segment)) return true;
+    // Allow hidden workspace directories such as .cursor and .github.
+    return /^\.[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(segment);
+  });
 }
 
 function isSecretBearingPath(path: string): boolean {
@@ -220,6 +219,26 @@ export const agentProposalSchema = z
   });
 
 export type AgentProposal = z.infer<typeof agentProposalSchema>;
+
+export function looksLikeReadOnlyQuestion(message: string): boolean {
+  const normalized = message.trim();
+  if (!normalized) return false;
+  return !/(```|(?:^|\s)(?:npm|pnpm|yarn|npx|git|docker|python3?|node)\b|(?:create|write|fix|implement|refactor|commit|push|merge|delete|run)\s)/i.test(normalized);
+}
+
+export function buildReadOnlyFallbackProposal(summary: string): AgentProposal {
+  const trimmed = summary.trim().slice(0, 1_200);
+  return agentProposalSchema.parse({
+    summary: trimmed || "The model returned an empty answer.",
+    plan: [],
+    proposedAction: "read_only_answer",
+    riskLevel: "R0",
+    needsApproval: false,
+    evidence: [],
+    artifacts: [],
+    execution: null,
+  });
+}
 
 /**
  * Recover explicit bounded commands from a prose-only Agent response path.

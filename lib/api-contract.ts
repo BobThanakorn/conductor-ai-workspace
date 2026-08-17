@@ -153,6 +153,7 @@ export const agentRequestSchema = z
     message: z.string().trim().min(1).max(6_000),
     mode: z.enum(["agent", "ask"]).default("agent"),
     engine: z.enum([
+      "conductor-native",
       "openai-agents",
       "langgraph",
       "pydantic-ai",
@@ -161,6 +162,7 @@ export const agentRequestSchema = z
       "llamaindex",
       "haystack",
       "semantic-kernel",
+      "openhands",
     ]).default("openai-agents"),
     model: z.string().trim().min(1).max(200).optional(),
     taskId: identifierSchema.optional(),
@@ -176,6 +178,7 @@ export const agentRequestSchema = z
       })
       .strict()
       .optional(),
+    skills: z.array(z.string().trim().regex(/^[a-z][a-z0-9.-]{0,63}$/)).max(4).optional(),
   })
   .strict();
 

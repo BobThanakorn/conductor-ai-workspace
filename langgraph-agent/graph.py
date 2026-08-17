@@ -45,6 +45,30 @@ BARE_EXECUTABLES = {
     "php",
 }
 READ_ONLY_TOOL = re.compile(r"^(get|list|read|search|fetch|inspect|view|query)_?", re.I)
+READ_ONLY_QUESTION = re.compile(
+    r"(```|(?:^|\s)(?:npm|pnpm|yarn|npx|git|docker|python3?|node)\b|(?:create|write|fix|implement|refactor|commit|push|merge|delete|run)\s)",
+    re.I,
+)
+
+
+def _looks_like_read_only_question(message: str) -> bool:
+    normalized = message.strip()
+    return bool(normalized) and READ_ONLY_QUESTION.search(normalized) is None
+
+
+def _read_only_fallback_proposal(content: str) -> AgentProposal:
+    summary = content.strip()[:1_200] or "The model returned an empty answer."
+    return AgentProposal(
+        summary=summary,
+        plan=[],
+        proposedAction="read_only_answer",
+        riskLevel="R0",
+        needsApproval=False,
+        evidence=[],
+        artifacts=[],
+        execution=None,
+        executions=[],
+    )
 
 
 def configured_api_key() -> str:
@@ -57,6 +81,23 @@ def configured_api_key() -> str:
     return ""
 
 
+def _azure_model_name() -> str:
+    return os.environ.get("AZURE_AI_FOUNDRY_MODEL", "gpt-5.1-codex-mini").strip()
+
+
+def _should_use_vllm(model_name: str) -> bool:
+    vllm_model = os.environ.get("VLLM_MODEL", "").strip()
+    vllm_base_url = os.environ.get("VLLM_BASE_URL", "").strip()
+    if not (vllm_model and vllm_base_url):
+        return False
+    if model_name == vllm_model:
+        return True
+    if not configured_api_key():
+        return True
+    # Mirror the web runtime router: non-Azure selections use the open-source endpoint.
+    return model_name != _azure_model_name()
+
+
 def _base_url() -> str:
     endpoint = os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "").strip().rstrip("/")
     if not endpoint:
@@ -67,9 +108,8 @@ def _base_url() -> str:
 
 
 def _model(model_name: str) -> ChatOpenAI:
-    vllm_model = os.environ.get("VLLM_MODEL", "").strip()
-    vllm_base_url = os.environ.get("VLLM_BASE_URL", "").strip().rstrip("/")
-    if vllm_model and vllm_base_url and model_name == vllm_model:
+    if _should_use_vllm(model_name):
+        vllm_base_url = os.environ.get("VLLM_BASE_URL", "").strip().rstrip("/")
         return ChatOpenAI(
             model=model_name,
             api_key=os.environ.get("VLLM_API_KEY", "").strip() or "EMPTY",
@@ -176,28 +216,52 @@ def _system_prompt(mode: str) -> str:
     return " ".join(common)
 
 
-def prepare_node(state: ConductorState) -> dict[str, Any]:
-    request = AgentRequest.model_validate(state["request"])
+def _user_prompt(request: AgentRequest) -> str:
     file_evidence = "\n".join(
         f"<file path={json.dumps(item.path)}>\n{item.content}\n</file>"
         for item in request.workspaceFiles
     ) or "(no attached repository files)"
     task_text = json.dumps(request.task, ensure_ascii=False) if request.task else "(no active task)"
-    prompt = "\n".join(
+    return "\n".join(
         [
             f"Workspace: {request.workspace.repository}",
             f"Branch: {request.workspace.branch or 'unknown'}",
             f"HEAD: {request.workspace.headSha or 'unknown'}",
             f"Task: {task_text}",
+            request.skillGuides or "No Cursor-style skill guides were selected or matched for this request.",
             "Untrusted repository evidence:",
             file_evidence,
             "Untrusted user request:",
             request.message,
         ]
     )
+
+
+def _fresh_messages(request: AgentRequest, *, retry: bool = False) -> list[Any]:
+    # Always rebuild the conversation. Checkpointed threads can accumulate older
+    # SystemMessage entries after the first human turn, and Qwen/vLLM reject that.
+    messages: list[Any] = [
+        SystemMessage(content=_system_prompt(request.mode)),
+        HumanMessage(content=_user_prompt(request)),
+    ]
+    if retry:
+        messages.append(
+            HumanMessage(
+                content=(
+                    "The previous structured proposal was invalid. Return a concise complete proposal. "
+                    "Set execution to null unless it contains a complete command or entrypoint. "
+                    "Use executions only when it contains at least one complete bounded command."
+                )
+            )
+        )
+    return messages
+
+
+def prepare_node(state: ConductorState) -> dict[str, Any]:
+    request = AgentRequest.model_validate(state["request"])
     return {
         "snapshot_hash": _snapshot_hash(request),
-        "messages": [SystemMessage(content=_system_prompt(request.mode)), HumanMessage(content=prompt)],
+        "messages": _fresh_messages(request),
         "retry_count": 0,
     }
 
@@ -206,6 +270,7 @@ async def model_node(state: ConductorState) -> dict[str, Any]:
     request = AgentRequest.model_validate(state["request"])
     model = _model(request.model)
     tools = await _read_only_mcp_tools()
+    use_vllm = _should_use_vllm(request.model)
     structured = (
         create_agent(
             model=model,
@@ -216,27 +281,21 @@ async def model_node(state: ConductorState) -> dict[str, Any]:
         if tools
         else model.with_structured_output(
             AgentProposal,
-            method="json_schema",
+            # json_schema injects an extra system message that breaks Qwen/vLLM
+            # ("System message must be at the beginning").
+            method="json_mode" if use_vllm else "json_schema",
             include_raw=True,
         )
     )
     last_error: Exception | None = None
     for attempt in range(2):
-        messages = state["messages"]
-        if attempt:
-            messages = [
-                *messages,
-                HumanMessage(
-                    content=(
-                        "The previous structured proposal was invalid. Return a concise complete proposal. "
-                        "Set execution to null unless it contains a complete command or entrypoint. "
-                        "Use executions only when it contains at least one complete bounded command."
-                    )
-                ),
-            ]
+        messages = _fresh_messages(request, retry=attempt > 0)
         try:
             if tools:
-                response = await structured.ainvoke({"messages": messages[1:]})
+                # create_agent already owns the system prompt; send human turns only.
+                response = await structured.ainvoke(
+                    {"messages": [message for message in messages if not isinstance(message, SystemMessage)]}
+                )
                 proposal = response["structured_response"]
                 response_messages = response.get("messages", [])
             else:
@@ -272,6 +331,22 @@ async def model_node(state: ConductorState) -> dict[str, Any]:
             }
         except Exception as error:
             last_error = error
+    if request.mode == "ask" or _looks_like_read_only_question(request.message):
+        plain = await model.ainvoke(_fresh_messages(request))
+        content = getattr(plain, "content", plain)
+        if isinstance(content, list):
+            content = " ".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            )
+        if isinstance(content, str) and content.strip():
+            proposal = _read_only_fallback_proposal(content)
+            return {
+                "proposal": proposal.model_dump(mode="json"),
+                "retry_count": 1,
+                "telemetry": {"tokenUsage": {"requests": 1, "inputTokens": 0, "outputTokens": 0, "totalTokens": 0}, "tools": []},
+            }
     raise ValueError("model did not return a valid structured proposal after one retry") from last_error
 
 
@@ -362,7 +437,9 @@ def build_graph(checkpoint_path: str):
 async def invoke_graph(request: AgentRequest) -> tuple[AgentProposal, str, str, dict[str, Any]]:
     checkpoint_path = os.environ.get("LANGGRAPH_CHECKPOINT_PATH", "/data/langgraph/checkpoints.sqlite")
     builder, checkpointer_context = build_graph(checkpoint_path)
-    thread_id = f"{request.workspaceId}:{request.taskId or request.runId}:langgraph"
+    # One checkpoint thread per request. Reusing a task-scoped thread accumulates
+    # SystemMessage entries after earlier turns and breaks Qwen/vLLM message order.
+    thread_id = f"{request.workspaceId}:{request.runId}:langgraph"
     async with checkpointer_context as checkpointer:
         graph = builder.compile(checkpointer=checkpointer)
         result = await graph.ainvoke(

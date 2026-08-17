@@ -73,6 +73,41 @@ test("supports an authenticated vLLM endpoint on a private network", () => {
   }
 });
 
+test("prefers open-source LiteLLM when CONDUCTOR_PRIMARY_LLM=opensource", () => {
+  const runtime = resolveAgentRuntimeConfig({
+    CONDUCTOR_PRIMARY_LLM: "opensource",
+    AZURE_AI_FOUNDRY_API_KEY: "azure-key",
+    AZURE_AI_FOUNDRY_MODEL: "gpt-5.1-codex-mini",
+    VLLM_BASE_URL: "https://litellm.example/v1",
+    VLLM_API_KEY: "sk-test",
+    VLLM_MODEL: "qwen3.6",
+  });
+
+  assert.deepEqual(runtime, {
+    provider: "openai",
+    apiKey: "sk-test",
+    baseURL: "https://litellm.example/v1",
+    model: "qwen3.6",
+  });
+});
+
+test("routes the selected Azure model to Foundry even when open-source is primary", () => {
+  const bindings = {
+    CONDUCTOR_PRIMARY_LLM: "opensource",
+    AZURE_AI_FOUNDRY_API_KEY: "azure-key",
+    AZURE_AI_FOUNDRY_MODEL: "gpt-5.1-codex-mini",
+    VLLM_BASE_URL: "https://litellm.example/v1",
+    VLLM_API_KEY: "sk-test",
+    VLLM_MODEL: "qwen3.6",
+    CONDUCTOR_MODEL_OPTIONS: "gpt-5.1-codex-mini",
+  };
+  const azure = resolveAgentRuntimeConfigForModel(bindings, "gpt-5.1-codex-mini");
+  assert.equal(azure.provider, "azure");
+  const vllm = resolveAgentRuntimeConfigForModel(bindings, "qwen3.6");
+  assert.equal(vllm.provider, "openai");
+  assert.equal(vllm.model, "qwen3.6");
+});
+
 test("routes the selected Qwen model to vLLM while keeping Azure as the default provider", () => {
   const bindings = {
     AZURE_AI_FOUNDRY_API_KEY: "azure-key",

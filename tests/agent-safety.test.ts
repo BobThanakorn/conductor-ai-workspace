@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   agentProposalSchema,
   assessAgentProposal,
+  buildReadOnlyFallbackProposal,
   formatUntrustedUserRequest,
   formatUntrustedWorkspaceFiles,
+  looksLikeReadOnlyQuestion,
   recoverExplicitArtifact,
   recoverExplicitCommandBatch,
   pythonWorkspaceFilesSchema,
@@ -178,6 +180,22 @@ test("requires execution to target a proposed artifact and bounds runtime fields
       artifacts: [{ path: "main.py", content: "print('ok')\n", language: "python" }],
       execution: { entrypoint: "main.py", args: [], timeoutMs: 300_001 },
     }));
+});
+
+test("accepts hidden workspace directories such as .cursor for read-only context", () => {
+  const files = [{ path: ".cursor/skills/conductor-workspace/SKILL.md", content: "# Skill\n" }];
+  assert.deepEqual(pythonWorkspaceFilesSchema.parse(files), files);
+});
+
+test("looksLikeReadOnlyQuestion ignores general knowledge prompts", () => {
+  assert.equal(looksLikeReadOnlyQuestion("เมืองหลวงของไทย"), true);
+  assert.equal(looksLikeReadOnlyQuestion("create hello.py with print('hi')"), false);
+});
+
+test("buildReadOnlyFallbackProposal returns an R0 read-only answer", () => {
+  const proposal = buildReadOnlyFallbackProposal("กรุงเทพมหานคร");
+  assert.equal(proposal.riskLevel, "R0");
+  assert.equal(proposal.proposedAction, "read_only_answer");
 });
 
 test("bounds current workspace Python context and labels it untrusted", () => {

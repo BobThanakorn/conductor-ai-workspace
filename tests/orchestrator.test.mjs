@@ -38,13 +38,13 @@ test("reports initial roadmap without creating tracked state", async () => {
   const result = run(ctx, "status");
   assert.equal(result.status, 0);
   assert.equal(result.json.counts.pending, result.json.phases.flatMap((phase) => phase.tasks).length);
-  assert.equal(result.json.next.terra, "P1-T1");
-  assert.equal(result.json.next.luna, "P1-T0");
+  assert.equal(result.json.next.terra, null);
+  assert.equal(result.json.next.luna, "P1-T1");
 });
 
 test("returns a bounded handoff for the next eligible worker task", async () => {
   const ctx = await context();
-  const result = run(ctx, "next", "--worker", "terra");
+  const result = run(ctx, "next", "--worker", "luna");
   assert.equal(result.status, 0);
   assert.equal(result.json.task.taskId, "P1-T1");
   assert.ok(result.json.task.operatingRules.some((rule) => rule.includes("Do not commit")));
@@ -52,43 +52,50 @@ test("returns a bounded handoff for the next eligible worker task", async () => 
 
 test("claim records an expiring lease and enforces worker capacity", async () => {
   const ctx = await context();
-  const claimed = run(ctx, "claim", "P1-T1", "--worker", "terra", "--lease-minutes", "5");
+  const claimed = run(ctx, "claim", "P1-T1", "--worker", "luna", "--lease-minutes", "5");
   assert.equal(claimed.status, 0);
   assert.equal(claimed.json.handoff.taskId, "P1-T1");
   assert.ok(Date.parse(claimed.json.handoff.leaseExpiresAt) > Date.now());
-  const second = run(ctx, "claim", "P1-T1", "--worker", "terra");
+  const second = run(ctx, "claim", "P1-T1", "--worker", "luna");
   assert.equal(second.status, 1);
   assert.match(second.json.error, /concurrency limit/);
 });
 
+test("only Luna can claim implementation tasks", async () => {
+  const ctx = await context();
+  const result = run(ctx, "claim", "P1-T1", "--worker", "terra");
+  assert.equal(result.status, 1);
+  assert.match(result.json.error, /Only implementation worker luna/);
+});
+
 test("blocked dependency cannot be claimed", async () => {
   const ctx = await context();
-  const result = run(ctx, "claim", "P1-T2", "--worker", "terra");
+  const result = run(ctx, "claim", "P1-T2", "--worker", "luna");
   assert.equal(result.status, 1);
   assert.match(result.json.error, /blocked by: P1-T1/);
 });
 
 test("heartbeat extends the active lease", async () => {
   const ctx = await context();
-  const claimed = run(ctx, "claim", "P1-T1", "--worker", "terra", "--lease-minutes", "1");
-  const renewed = run(ctx, "heartbeat", "P1-T1", "--worker", "terra", "--lease-minutes", "10");
+  const claimed = run(ctx, "claim", "P1-T1", "--worker", "luna", "--lease-minutes", "1");
+  const renewed = run(ctx, "heartbeat", "P1-T1", "--worker", "luna", "--lease-minutes", "10");
   assert.equal(renewed.status, 0);
   assert.ok(Date.parse(renewed.json.leaseExpiresAt) > Date.parse(claimed.json.handoff.leaseExpiresAt));
 });
 
 test("submission rejects missing required verification", async () => {
   const ctx = await context();
-  run(ctx, "claim", "P1-T1", "--worker", "terra");
+  run(ctx, "claim", "P1-T1", "--worker", "luna");
   const evidence = join(ctx.directory, "bad-evidence.json");
   await writeFile(evidence, JSON.stringify({ summary: "partial", files: [], checks: [] }));
-  const result = run(ctx, "submit", "P1-T1", "--worker", "terra", "--evidence", evidence);
+  const result = run(ctx, "submit", "P1-T1", "--worker", "luna", "--evidence", evidence);
   assert.equal(result.status, 1);
   assert.match(result.json.error, /Missing required check evidence/);
 });
 
 test("valid evidence enters review and prevents self-approval", async () => {
   const ctx = await context();
-  run(ctx, "claim", "P1-T1", "--worker", "terra");
+  run(ctx, "claim", "P1-T1", "--worker", "luna");
   const evidence = join(ctx.directory, "evidence.json");
   await writeFile(evidence, JSON.stringify({
     summary: "Contract implemented",
@@ -98,13 +105,13 @@ test("valid evidence enters review and prevents self-approval", async () => {
       { command: "npm test", exitCode: 0 }
     ]
   }));
-  const submitted = run(ctx, "submit", "P1-T1", "--worker", "terra", "--evidence", evidence);
+  const submitted = run(ctx, "submit", "P1-T1", "--worker", "luna", "--evidence", evidence);
   assert.equal(submitted.status, 0);
   assert.equal(submitted.json.status, "needs_review");
-  const selfReview = run(ctx, "review", "P1-T1", "--reviewer", "terra", "--decision", "approve");
+  const selfReview = run(ctx, "review", "P1-T1", "--reviewer", "luna", "--decision", "approve");
   assert.equal(selfReview.status, 1);
   assert.match(selfReview.json.error, /cannot approve their own task/);
-  const approved = run(ctx, "review", "P1-T1", "--reviewer", "luna", "--decision", "approve");
+  const approved = run(ctx, "review", "P1-T1", "--reviewer", "terra", "--decision", "approve");
   assert.equal(approved.status, 0);
   assert.equal(approved.json.status, "completed");
 });
@@ -115,11 +122,12 @@ test("approved dependency unlocks the next task", async () => {
     version: 1,
     updatedAt: new Date().toISOString(),
     tasks: {
+      "P1-T0": { status: "completed", attempts: 1, claimedBy: "codex", leaseExpiresAt: null, evidence: {}, review: { reviewer: "terra", decision: "approve" }, lastError: null },
       "P1-T1": { status: "completed", attempts: 1, claimedBy: "terra", leaseExpiresAt: null, evidence: {}, review: { reviewer: "luna", decision: "approve" }, lastError: null }
     }
   };
   await writeFile(ctx.state, JSON.stringify(state));
-  const result = run(ctx, "next", "--worker", "terra");
+  const result = run(ctx, "next", "--worker", "luna");
   assert.equal(result.status, 0);
   assert.equal(result.json.task.taskId, "P1-T2");
   const persisted = JSON.parse(await readFile(ctx.state, "utf8"));

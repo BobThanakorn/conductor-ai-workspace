@@ -58,13 +58,18 @@ docker compose -f compose.yaml -f compose.azure.yaml -f compose.github.yaml up -
 
 ## Agent engines
 
-The portal can run the same request through either:
+The portal can run the same request through any ready engine, but the primary
+coding picker only shows engines classified as `agentic` with a verified tool
+loop. Ask-only and retrieval engines remain available for labelled benchmark
+comparisons and never imply an approval-bound coding path:
 
 - `OpenAI Agents SDK` — the existing TypeScript orchestration engine.
 - `LangChain + LangGraph` — an isolated Python service with SQLite-backed
   LangGraph checkpoints.
+- `PydanticAI`, `CrewAI`, `Microsoft Agent Framework`, `LlamaIndex`,
+  `Haystack`, and `Semantic Kernel` — isolated Python harness adapters.
 
-Both engines return the same reviewed proposal schema. Neither engine writes
+All eight engines return the same reviewed proposal schema. Neither engine writes
 files, runs commands, or performs Git mutations directly. The browser requests
 a payload-bound approval from the selected execution companion before any
 side effect. The LangGraph engine uses a second companion on port `8766` so
@@ -107,15 +112,16 @@ response time, tool events, and the append-only audit trail. Completed runs are
 stored with the workspace and remain available in `Recent audited runs` after
 refreshing the page.
 
-The MCP gateway is optional. Both agent engines filter its tool catalog to
+The MCP gateway is optional. All agent engines filter its tool catalog to
 read/list/search/fetch/query operations. Repository writes, shell commands,
 remote Git publication, and pull requests stay behind Conductor's one-time
 approval flow.
 
 The workspace root `skills.md` is automatically included in the bounded
-repository snapshot when the portal is connected. It supplies engineering,
-verification, safety, and MCP guidance to both engines; it is context only and
-cannot grant execution permission.
+repository snapshot when the portal is connected. Cursor-style skill guides
+from `.cursor/skills/*/SKILL.md` are discovered by the companion, listed at
+`/api/skills`, and injected into agent prompts when selected or auto-matched.
+Both are context only and cannot grant execution permission.
 
 To expose both Azure and a local vLLM model in the model picker, configure both
 providers. The selected Qwen model is routed to vLLM while Azure remains the

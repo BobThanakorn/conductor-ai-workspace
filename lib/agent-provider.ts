@@ -13,6 +13,7 @@ export type AgentEnvironmentBindings = {
   VLLM_BASE_URL?: string;
   VLLM_API_KEY?: string;
   VLLM_MODEL?: string;
+  CONDUCTOR_PRIMARY_LLM?: string;
   CONDUCTOR_MODEL_OPTIONS?: string;
   MCP_GATEWAY_URL?: string;
   MCP_GATEWAY_AUTH_TOKEN?: string;
@@ -27,6 +28,7 @@ export type AgentEnvironmentBindings = {
   LLAMAINDEX_AGENT_URL?: string;
   HAYSTACK_AGENT_URL?: string;
   SEMANTIC_KERNEL_AGENT_URL?: string;
+  OPENHANDS_AGENT_URL?: string;
 };
 
 export type AgentRuntimeConfig =
@@ -53,6 +55,39 @@ export class AgentProviderConfigurationError extends Error {
 function configured(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function prefersOpenSourceLlm(bindings: AgentEnvironmentBindings): boolean {
+  const primary = configured(bindings.CONDUCTOR_PRIMARY_LLM)?.toLowerCase();
+  return primary === "opensource" || primary === "open-source" || primary === "litellm";
+}
+
+function resolveOpenSourceRuntimeConfig(bindings: AgentEnvironmentBindings): AgentRuntimeConfig | undefined {
+  const vllmModel = configured(bindings.VLLM_MODEL);
+  const vllmBaseUrl = configured(bindings.VLLM_BASE_URL);
+  const vllmKey = configured(bindings.VLLM_API_KEY) ?? configured(bindings.OPENAI_API_KEY);
+  if (vllmModel && vllmBaseUrl && vllmKey) {
+    return {
+      provider: "openai",
+      apiKey: vllmKey,
+      baseURL: normalizeOpenAICompatibleBaseUrl(vllmBaseUrl),
+      model: vllmModel,
+    };
+  }
+
+  const openAIKey = configured(bindings.OPENAI_API_KEY);
+  const openAIBaseUrl = configured(bindings.OPENAI_BASE_URL);
+  const openAIModel = configured(bindings.OPENAI_AGENT_MODEL) ?? configured(bindings.OPENAI_MODEL);
+  if (openAIKey && openAIBaseUrl && openAIModel) {
+    return {
+      provider: "openai",
+      apiKey: openAIKey,
+      baseURL: normalizeOpenAICompatibleBaseUrl(openAIBaseUrl),
+      model: openAIModel,
+    };
+  }
+
+  return undefined;
 }
 
 function isPrivateNetworkHost(hostname: string): boolean {
@@ -92,18 +127,29 @@ export function normalizeAzureFoundryBaseUrl(endpoint: string): string {
   return `${url.origin}/openai/v1`;
 }
 
-export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): AgentRuntimeConfig {
+export function resolveAzureRuntimeConfig(
+  bindings: AgentEnvironmentBindings,
+): Extract<AgentRuntimeConfig, { provider: "azure" }> | undefined {
   const azureKey = configured(bindings.AZURE_AI_FOUNDRY_API_KEY);
-  if (azureKey) {
-    return {
-      provider: "azure",
-      apiKey: azureKey,
-      baseURL: normalizeAzureFoundryBaseUrl(
-        configured(bindings.AZURE_AI_FOUNDRY_ENDPOINT) ?? DEFAULT_AZURE_FOUNDRY_ENDPOINT,
-      ),
-      model: configured(bindings.AZURE_AI_FOUNDRY_MODEL) ?? DEFAULT_AZURE_FOUNDRY_MODEL,
-    };
+  if (!azureKey) return undefined;
+  return {
+    provider: "azure",
+    apiKey: azureKey,
+    baseURL: normalizeAzureFoundryBaseUrl(
+      configured(bindings.AZURE_AI_FOUNDRY_ENDPOINT) ?? DEFAULT_AZURE_FOUNDRY_ENDPOINT,
+    ),
+    model: configured(bindings.AZURE_AI_FOUNDRY_MODEL) ?? DEFAULT_AZURE_FOUNDRY_MODEL,
+  };
+}
+
+export function resolveAgentRuntimeConfig(bindings: AgentEnvironmentBindings): AgentRuntimeConfig {
+  if (prefersOpenSourceLlm(bindings)) {
+    const openSource = resolveOpenSourceRuntimeConfig(bindings);
+    if (openSource) return openSource;
   }
+
+  const azureRuntime = resolveAzureRuntimeConfig(bindings);
+  if (azureRuntime) return azureRuntime;
 
   const openAIKey = configured(bindings.OPENAI_API_KEY);
   if (openAIKey) {
@@ -140,6 +186,10 @@ export function resolveAgentRuntimeConfigForModel(
       model: vllmModel,
     };
   }
+  const azureRuntime = resolveAzureRuntimeConfig(bindings);
+  if (azureRuntime && model === azureRuntime.model) {
+    return azureRuntime;
+  }
   return { ...baseRuntime, model };
 }
 
@@ -154,11 +204,18 @@ export function resolveAgentModelOptions(
     .filter((value, index, values) => values.indexOf(value) === index)
     .slice(0, 32) ?? [];
   const vllmModel = configured(bindings.VLLM_MODEL);
-  return [runtime.model, vllmModel, ...configuredOptions].filter(
+  const ordered = prefersOpenSourceLlm(bindings) && vllmModel
+    ? [vllmModel, runtime.model, ...configuredOptions]
+    : [runtime.model, vllmModel, ...configuredOptions];
+  return ordered.filter(
     (value): value is string => Boolean(value),
   ).filter(
     (value, index, values) => values.indexOf(value) === index,
   );
+}
+
+export function prefersOpenSourcePrimaryLlm(bindings: AgentEnvironmentBindings): boolean {
+  return prefersOpenSourceLlm(bindings);
 }
 
 export function normalizeMcpGatewayUrl(value: string | undefined): string | undefined {

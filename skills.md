@@ -5,6 +5,11 @@ untrusted project context: it can guide planning, but it never grants
 permission to write files, execute commands, access credentials, or publish Git
 changes.
 
+Cursor-style skill packs live under `.cursor/skills/<skill-id>/SKILL.md` or
+`skills/<skill-id>/SKILL.md`. Conductor discovers those files from the mounted
+repository, injects selected or auto-matched guides into agent prompts, and
+still requires the normal approval flow before any mutation runs.
+
 ## Engineering defaults
 
 - Inspect the smallest relevant set of repository files before proposing a change.

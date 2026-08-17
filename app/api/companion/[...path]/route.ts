@@ -7,6 +7,8 @@ const allowedRoutes = new Map<string, ReadonlySet<string>>([
   ["workspace/select", new Set(["POST"])],
   ["fs/read", new Set(["POST"])],
   ["context/search", new Set(["POST"])],
+  ["skills/catalog", new Set(["GET"])],
+  ["skills/resolve", new Set(["POST"])],
   ["fs/write", new Set(["POST"])],
   ["fs/delete", new Set(["POST"])],
   ["terminal/execute", new Set(["POST"])],

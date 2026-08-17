@@ -3,15 +3,14 @@ x-harness: &harness
     context: ./agent-harnesses
     dockerfile: common/Dockerfile
   init: true
-  profiles: ["benchmark"]
+  profiles: ["minimal", "full", "benchmark"]
   restart: unless-stopped
-  security_opt: ["no-new-privileges:true"]
-  cap_drop: ["ALL"]
   pids_limit: 256
   mem_limit: 2g
   cpus: 2.0
   environment:
     AZURE_AI_FOUNDRY_ENDPOINT: ${AZURE_AI_FOUNDRY_ENDPOINT:-}
+    AZURE_AI_FOUNDRY_API_KEY: ${AZURE_AI_FOUNDRY_API_KEY:-}
     AZURE_AI_FOUNDRY_MODEL: ${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}
   secrets: [azure-api-key]
   healthcheck:
@@ -30,19 +29,6 @@ services:
       LLAMAINDEX_AGENT_URL: http://agent-llamaindex:8020
       HAYSTACK_AGENT_URL: http://agent-haystack:8020
       SEMANTIC_KERNEL_AGENT_URL: http://agent-semantic-kernel:8020
-    depends_on:
-      agent-pydanticai:
-        condition: service_healthy
-      agent-crewai:
-        condition: service_healthy
-      agent-microsoft-framework:
-        condition: service_healthy
-      agent-llamaindex:
-        condition: service_healthy
-      agent-haystack:
-        condition: service_healthy
-      agent-semantic-kernel:
-        condition: service_healthy
   agent-pydanticai:
     <<: *harness
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/pydanticai.lock } }
@@ -50,6 +36,7 @@ services:
     environment: { HARNESS_ID: pydantic-ai, HARNESS_MODULE: pydantic_ai, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-microsoft-framework:
     <<: *harness
+    profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/microsoft-agent-framework.lock } }
     image: conductor-agent-microsoft-framework:0.1.0
     environment: { HARNESS_ID: microsoft-agent-framework, HARNESS_MODULE: agent_framework, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
@@ -57,19 +44,22 @@ services:
     <<: *harness
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/crewai.lock } }
     image: conductor-agent-crewai:0.1.0
-    environment: { HARNESS_ID: crewai, HARNESS_MODULE: crewai, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
+    environment: { HARNESS_ID: crewai, HARNESS_MODULE: crewai, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_API_KEY: "${AZURE_AI_FOUNDRY_API_KEY:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-llamaindex:
     <<: *harness
+    profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/llamaindex.lock } }
     image: conductor-agent-llamaindex:0.1.0
     environment: { HARNESS_ID: llamaindex, HARNESS_MODULE: llama_index, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-haystack:
     <<: *harness
+    profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/haystack.lock } }
     image: conductor-agent-haystack:0.1.0
     environment: { HARNESS_ID: haystack, HARNESS_MODULE: haystack, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-semantic-kernel:
     <<: *harness
+    profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/semantic-kernel.lock } }
     image: conductor-agent-semantic-kernel:0.1.0
     environment: { HARNESS_ID: semantic-kernel, HARNESS_MODULE: semantic_kernel, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }

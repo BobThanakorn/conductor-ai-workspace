@@ -1,8 +1,27 @@
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+HIDDEN_SEGMENT = re.compile(r"^\.[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+VISIBLE_SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+
+
+def _is_safe_workspace_segment(segment: str) -> bool:
+    if not segment or segment in {".", ".."}:
+        return False
+    return bool(VISIBLE_SEGMENT.match(segment) or HIDDEN_SEGMENT.match(segment))
+
+
+def _normalize_workspace_path(value: str) -> str:
+    normalized = value.replace("\\", "/").strip("/")
+    if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
+        raise ValueError("path must stay inside the workspace")
+    if not all(_is_safe_workspace_segment(segment) for segment in normalized.split("/")):
+        raise ValueError("path must stay inside the workspace")
+    return normalized
 
 
 class WorkspaceFile(BaseModel):
@@ -14,10 +33,7 @@ class WorkspaceFile(BaseModel):
     @field_validator("path")
     @classmethod
     def validate_relative_path(cls, value: str) -> str:
-        normalized = value.replace("\\", "/").strip("/")
-        if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
-            raise ValueError("path must stay inside the workspace")
-        return normalized
+        return _normalize_workspace_path(value)
 
 
 class WorkspaceIdentity(BaseModel):
@@ -41,6 +57,7 @@ class AgentRequest(BaseModel):
     workspaceFiles: list[WorkspaceFile] = Field(default_factory=list, max_length=8)
     workspace: WorkspaceIdentity
     task: dict[str, object] | None = None
+    skillGuides: str | None = Field(default=None, max_length=24_000)
 
 
 class AgentArtifact(BaseModel):
@@ -53,10 +70,7 @@ class AgentArtifact(BaseModel):
     @field_validator("path")
     @classmethod
     def validate_relative_path(cls, value: str) -> str:
-        normalized = value.replace("\\", "/").strip("/")
-        if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
-            raise ValueError("artifact path must stay inside the workspace")
-        return normalized
+        return _normalize_workspace_path(value)
 
 
 class ExecutionStep(BaseModel):

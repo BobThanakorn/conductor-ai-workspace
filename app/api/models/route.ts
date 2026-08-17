@@ -1,19 +1,52 @@
 import { ApiError, errorResponse, jsonResponse } from "@/lib/api-contract";
 import {
   AgentProviderConfigurationError,
+  DEFAULT_AZURE_FOUNDRY_MODEL,
+  prefersOpenSourcePrimaryLlm,
   resolveAgentModelOptions,
   resolveAgentRuntimeConfig,
+  resolveAzureRuntimeConfig,
 } from "@/lib/agent-provider";
 import { getEnvironmentBindings } from "@/lib/environment-store";
 import { getLangGraphHealth } from "@/lib/langgraph-agent";
 import { getHarnessHealth } from "@/lib/external-harness";
+import { getOpenHandsHealth } from "@/lib/openhands-harness";
+import { engineCapability, type EngineCapability } from "@/lib/engine-capabilities";
 
 export const dynamic = "force-dynamic";
+
+const MODEL_LIST_CAP = 32;
+const ENGINE_SOURCES: Record<EngineCapability["id"], string> = {
+  "conductor-native": "Conductor",
+  "openai-agents": "OpenAI",
+  langgraph: "LangChain",
+  "pydantic-ai": "PydanticAI",
+  crewai: "CrewAI",
+  "microsoft-agent-framework": "Microsoft",
+  llamaindex: "LlamaIndex",
+  haystack: "Haystack",
+  "semantic-kernel": "Microsoft",
+  openhands: "OpenHands",
+};
+
+function withEngineSource(
+  engine: EngineCapability & { status: string; codingReady: boolean },
+) {
+  return { ...engine, source: ENGINE_SOURCES[engine.id] };
+}
+
+function prioritizeModels(pinned: string[], models: string[], cap = MODEL_LIST_CAP): string[] {
+  const priority = [...new Set(pinned.filter(Boolean))];
+  const remainder = models.filter((model) => model && !priority.includes(model));
+  return [...priority, ...remainder].slice(0, cap);
+}
 
 export async function GET() {
   try {
     const bindings = getEnvironmentBindings();
     const runtime = resolveAgentRuntimeConfig(bindings);
+    const vllmModel = bindings.VLLM_MODEL?.trim();
+    const vllmBaseURL = bindings.VLLM_BASE_URL?.trim();
     let models = resolveAgentModelOptions(bindings, runtime);
     const modelStatus: Record<string, "ready" | "configured" | "unavailable"> = {};
     modelStatus[runtime.model] = "ready";
@@ -28,19 +61,20 @@ export async function GET() {
           const remoteModels = (payload.data ?? [])
             .map((entry) => typeof entry.id === "string" ? entry.id.trim() : "")
             .filter(Boolean)
-            .slice(0, 32);
+            .slice(0, MODEL_LIST_CAP);
           // Provider discovery proves that a model identifier is listed, not
           // that this resource can successfully invoke it. Only the configured
           // default is marked ready until an actual inference succeeds.
           for (const model of remoteModels) modelStatus[model] ??= "configured";
-          models = [...new Set([runtime.model, ...remoteModels, ...models])].slice(0, 32);
+          models = prioritizeModels(
+            [runtime.model, ...(vllmModel ? [vllmModel] : [])],
+            [...remoteModels, ...models],
+          );
         }
       } catch {
         // The configured model remains selectable when the provider model list is unavailable.
       }
     }
-    const vllmModel = bindings.VLLM_MODEL?.trim();
-    const vllmBaseURL = bindings.VLLM_BASE_URL?.trim();
     if (vllmModel) modelStatus[vllmModel] = "configured";
     if (vllmModel && vllmBaseURL) {
       try {
@@ -59,12 +93,48 @@ export async function GET() {
             }
           }
           if (vllmModel && modelStatus[vllmModel] !== "ready") modelStatus[vllmModel] = "unavailable";
-          models = [...new Set([...models, ...remoteVllmModels])].slice(0, 32);
+          models = prioritizeModels(
+            [...(vllmModel ? [vllmModel] : []), ...remoteVllmModels],
+            models,
+          );
         }
       } catch {
         // Keep configured/unavailable status when the local provider cannot be reached.
       }
     }
+    const azureRuntime = resolveAzureRuntimeConfig(bindings);
+    if (azureRuntime) {
+      modelStatus[azureRuntime.model] = "ready";
+      try {
+        const response = await fetch(`${azureRuntime.baseURL}/models`, {
+          headers: { Authorization: `Bearer ${azureRuntime.apiKey}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(3_000),
+        });
+        if (response.ok) {
+          const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+          const remoteAzureModels = (payload.data ?? [])
+            .map((entry) => typeof entry.id === "string" ? entry.id.trim() : "")
+            .filter(Boolean)
+            .slice(0, MODEL_LIST_CAP);
+          for (const model of remoteAzureModels) modelStatus[model] ??= "configured";
+          models = prioritizeModels(
+            [azureRuntime.model],
+            [...remoteAzureModels, ...models],
+          );
+        }
+      } catch {
+        // Keep the configured Azure deployment ready when discovery is unavailable.
+      }
+    } else {
+      const azureModel = bindings.AZURE_AI_FOUNDRY_MODEL?.trim() ?? DEFAULT_AZURE_FOUNDRY_MODEL;
+      if (models.includes(azureModel)) modelStatus[azureModel] = "unavailable";
+    }
+    const pinnedReadyModels = [
+      ...(vllmModel && modelStatus[vllmModel] === "ready" ? [vllmModel] : []),
+      ...(azureRuntime && modelStatus[azureRuntime.model] === "ready" ? [azureRuntime.model] : []),
+      ...models.filter((model) => modelStatus[model] === "ready"),
+    ];
+    models = prioritizeModels(pinnedReadyModels, models);
     for (const model of models) modelStatus[model] ??= "configured";
     const readyModels = models.filter((model) => modelStatus[model] === "ready");
     const readyModelStatus = Object.fromEntries(
@@ -96,47 +166,69 @@ export async function GET() {
       try { crewAI = await getHarnessHealth(bindings.CREWAI_AGENT_URL.trim()); } catch { crewAI = { ok: false }; }
     }
     const externalHarnesses = await Promise.all([
-      ["microsoft-agent-framework", "Microsoft Agent Framework", bindings.MICROSOFT_AGENT_FRAMEWORK_URL],
-      ["llamaindex", "LlamaIndex", bindings.LLAMAINDEX_AGENT_URL],
-      ["haystack", "Haystack", bindings.HAYSTACK_AGENT_URL],
-      ["semantic-kernel", "Semantic Kernel", bindings.SEMANTIC_KERNEL_AGENT_URL],
-    ].map(async ([id, name, url]) => {
-      if (!url?.trim()) return { id, name, status: "unavailable" };
+      ["microsoft-agent-framework", bindings.MICROSOFT_AGENT_FRAMEWORK_URL],
+      ["llamaindex", bindings.LLAMAINDEX_AGENT_URL],
+      ["haystack", bindings.HAYSTACK_AGENT_URL],
+      ["semantic-kernel", bindings.SEMANTIC_KERNEL_AGENT_URL],
+    ].map(async ([id, url]) => {
+      const engineId = id as EngineCapability["id"];
+      if (!url?.trim()) return withEngineSource(engineCapability(engineId, "unavailable"));
       try {
         const health = await getHarnessHealth(url.trim());
-        return { id, name, status: health.ok ? "ready" : "unavailable" };
+        return withEngineSource(engineCapability(engineId, health.ok ? "ready" : "unavailable"));
       } catch {
-        return { id, name, status: "unavailable" };
+        return withEngineSource(engineCapability(engineId, "unavailable"));
       }
     }));
+    const openhands = bindings.OPENHANDS_AGENT_URL?.trim()
+      ? await getOpenHandsHealth(bindings.OPENHANDS_AGENT_URL.trim()).catch(() => ({ ok: false, ready: false }))
+      : { ok: false, ready: false };
+    const providers: Array<{ provider: string; model: string; baseURL?: string }> = [];
+    if (
+      prefersOpenSourcePrimaryLlm(bindings)
+      && vllmModel
+      && vllmBaseURL
+      && modelStatus[vllmModel] === "ready"
+    ) {
+      providers.push({ provider: "litellm", model: vllmModel, baseURL: vllmBaseURL });
+    }
+    if (azureRuntime && modelStatus[azureRuntime.model] === "ready") {
+      providers.push({
+        provider: "azure",
+        model: azureRuntime.model,
+        baseURL: azureRuntime.baseURL,
+      });
+    }
+    if (!providers.length) {
+      providers.push({ provider: runtime.provider, model: runtime.model, ...(runtime.baseURL ? { baseURL: runtime.baseURL } : {}) });
+      if (
+        bindings.VLLM_MODEL
+        && bindings.VLLM_BASE_URL
+        && modelStatus[bindings.VLLM_MODEL.trim()] === "ready"
+        && bindings.VLLM_MODEL.trim() !== runtime.model
+      ) {
+        providers.push({
+          provider: "vllm",
+          model: bindings.VLLM_MODEL.trim(),
+          baseURL: bindings.VLLM_BASE_URL.trim(),
+        });
+      }
+    }
     return jsonResponse({
       ok: true,
       provider: runtime.provider,
       model: runtime.model,
       models: readyModels,
       modelStatus: readyModelStatus,
-      providers: [
-        { provider: runtime.provider, model: runtime.model },
-        ...(bindings.VLLM_MODEL
-          && bindings.VLLM_BASE_URL
-          && modelStatus[bindings.VLLM_MODEL.trim()] === "ready"
-          ? [{ provider: "vllm", model: bindings.VLLM_MODEL, baseURL: bindings.VLLM_BASE_URL }]
-          : []),
-      ],
+      providers,
       engines: [
-        { id: "openai-agents", name: "OpenAI Agents SDK", status: "ready" },
-        {
-          id: "langgraph",
-          name: "LangChain + LangGraph",
-          status: langgraph.ok && langgraph.modelConfigured ? "ready" : "unavailable",
-        },
-        {
-          id: "pydantic-ai",
-          name: "PydanticAI",
-          status: pydanticAI.ok ? "ready" : "unavailable",
-        },
-        { id: "crewai", name: "CrewAI", status: crewAI.ok ? "ready" : "unavailable" },
+        withEngineSource(engineCapability("conductor-native", runtime.provider === "openai" && Boolean(runtime.baseURL) ? "ready" : "unavailable")),
+        withEngineSource(engineCapability("openai-agents", "ready")),
+        withEngineSource(engineCapability("langgraph", langgraph.ok && langgraph.modelConfigured ? "ready" : "unavailable")),
+        withEngineSource(engineCapability("pydantic-ai", pydanticAI.ok ? "ready" : "unavailable")),
+        withEngineSource(engineCapability("crewai", crewAI.ok ? "ready" : "unavailable")),
         ...externalHarnesses,
+        withEngineSource(engineCapability("openhands", openhands.ok && openhands.ready ? "ready" : "unavailable")),
       ],
     });
   } catch (error) {

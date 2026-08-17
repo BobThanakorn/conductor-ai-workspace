@@ -24,6 +24,11 @@ import {
   recoverTaskWorktrees,
   releaseTaskWorktree,
 } from "./worktree-manager";
+import {
+  discoverWorkspaceSkillCatalog,
+  discoverWorkspaceSkills,
+} from "./skill-discovery";
+import { resolveActiveSkills } from "../lib/skill-registry";
 
 const PORT = Number(process.env.CONDUCTOR_COMPANION_PORT ?? 8765);
 const HOST = process.env.CONDUCTOR_COMPANION_HOST ?? "127.0.0.1";
@@ -226,6 +231,44 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       const body = await readBody(request);
       if (typeof body.path !== "string") throw new Error("path is required.");
       return send(response, 200, { ok: true, ...(await readWorkspaceFile(activeRoot, body.path)) });
+    }
+    if (request.method === "GET" && url.pathname === "/skills/catalog") {
+      const catalog = await discoverWorkspaceSkillCatalog(activeRoot);
+      return send(response, 200, { ok: true, catalog });
+    }
+    if (request.method === "POST" && url.pathname === "/skills/resolve") {
+      const body = await readBody(request);
+      const message = typeof body.message === "string" ? body.message.trim().slice(0, 6_000) : "";
+      const taskGoal = typeof body.taskGoal === "string" ? body.taskGoal.slice(0, 8_000) : null;
+      const skillIds = Array.isArray(body.skillIds)
+        ? body.skillIds.filter((value): value is string => typeof value === "string")
+        : [];
+      const catalog = await discoverWorkspaceSkills(activeRoot);
+      try {
+        const skills = resolveActiveSkills({
+          catalog,
+          message,
+          explicitIds: skillIds,
+          taskGoal,
+        });
+        return send(response, 200, {
+          ok: true,
+          catalog: catalog.map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            path: skill.path,
+            disableModelInvocation: skill.disableModelInvocation,
+          })),
+          skills,
+        });
+      } catch (error) {
+        return send(response, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : "Skill resolution failed.",
+          catalog: catalog.map((skill) => skill.id),
+        });
+      }
     }
     if (request.method === "POST" && url.pathname === "/context/search") {
       const body = await readBody(request);

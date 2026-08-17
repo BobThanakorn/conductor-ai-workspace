@@ -43,6 +43,7 @@ async function execute(action, roadmap, index, state) {
     case "claim": {
       const worker = requireWorker(index, args.worker);
       const task = requireTask(index, args._[0]);
+      assertImplementationWorker(roadmap, worker);
       assertWorkerCanRun(worker, task);
       assertDependenciesComplete(task, state);
       assertWorkerCapacity(index, state, worker);
@@ -127,10 +128,16 @@ async function execute(action, roadmap, index, state) {
 
 function validateRoadmap(roadmap) {
   if (!roadmap || roadmap.version !== 1 || !Array.isArray(roadmap.phases) || !roadmap.workers) throw new Error("Roadmap must use version 1 and contain workers and phases.");
+  if (typeof roadmap.policy?.implementationWorker !== "string" || !roadmap.policy.implementationWorker.trim()) {
+    throw new Error("Roadmap policy requires implementationWorker.");
+  }
   const workers = new Map();
   for (const [id, profile] of Object.entries(roadmap.workers)) {
     if (!Array.isArray(profile.capabilities) || profile.capabilities.length === 0) throw new Error(`Worker ${id} has no capabilities.`);
     workers.set(id, { id, ...profile });
+  }
+  if (!workers.has(roadmap.policy.implementationWorker)) {
+    throw new Error(`Unknown implementation worker: ${roadmap.policy.implementationWorker}.`);
   }
   const tasks = new Map();
   for (const phase of roadmap.phases) {
@@ -151,7 +158,7 @@ function validateRoadmap(roadmap) {
     }
   }
   detectCycles(tasks);
-  return { workers, tasks };
+  return { workers, tasks, implementationWorker: roadmap.policy.implementationWorker };
 }
 
 function detectCycles(tasks) {
@@ -194,6 +201,7 @@ function expireLeases(state) {
 }
 
 function selectNextTask(index, state, worker) {
+  if (worker.id !== index.implementationWorker) return null;
   if (activeClaims(state, worker.id) >= worker.maxConcurrentTasks) return null;
   return [...index.tasks.values()]
     .filter((task) => ["pending", "failed", "blocked"].includes(state.tasks[task.id].status))
@@ -283,6 +291,12 @@ function requireClaim(state, taskId, workerId) {
 function assertWorkerCanRun(worker, task) {
   const missing = task.requiredCapabilities.filter((capability) => !worker.capabilities.includes(capability));
   if (missing.length) throw new Error(`Worker ${worker.id} lacks capabilities: ${missing.join(", ")}.`);
+}
+
+function assertImplementationWorker(roadmap, worker) {
+  if (worker.id !== roadmap.policy.implementationWorker) {
+    throw new Error(`Only implementation worker ${roadmap.policy.implementationWorker} may claim roadmap tasks.`);
+  }
 }
 
 function assertDependenciesComplete(task, state) {

@@ -23,8 +23,10 @@ import { ensureOperationsSchema, quotaLimit, reserveQuota, traceId } from "@/lib
 import {
   agentProposalSchema,
   assessAgentProposal,
+  buildReadOnlyFallbackProposal,
   formatUntrustedUserRequest,
   formatUntrustedWorkspaceFiles,
+  looksLikeReadOnlyQuestion,
   recoverExplicitArtifact,
   recoverExplicitCommandBatch,
   type AgentProposal,
@@ -53,12 +55,46 @@ import {
 } from "@/lib/agent-telemetry";
 import { buildAgentContractV2, type AgentContractV2 } from "@/lib/agent-contract";
 import { retrieveRepositoryContext, updateRepositoryIndex, type RepositoryIndex } from "@/lib/repository-index";
+import { loadSkillsForAgentRequest } from "@/lib/skill-loader";
+import { runConductorNativeAgent } from "@/lib/conductor-native-agent";
+import { runOpenHandsHarness } from "@/lib/openhands-harness";
 
 export const dynamic = "force-dynamic";
 
 const repositoryIndexCache = new Map<string, RepositoryIndex>();
 
 type AgentOutput = AgentProposal;
+
+async function fetchPlainChatAnswer(
+  runtime: AgentRuntimeConfig,
+  message: string,
+): Promise<string | undefined> {
+  if (!runtime.baseURL) return undefined;
+  const response = await fetch(`${runtime.baseURL.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${runtime.apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      model: runtime.model,
+      messages: [
+        { role: "system", content: "Answer in natural Thai. Keep code, paths, and identifiers literal." },
+        { role: "user", content: message },
+      ],
+      max_tokens: 512,
+      ...(runtime.provider === "openai"
+        ? { chat_template_kwargs: { enable_thinking: false } }
+        : {}),
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) return undefined;
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = payload.choices?.[0]?.message?.content?.trim();
+  return content || undefined;
+}
 
 async function runLiveAgent(
   runtime: AgentRuntimeConfig,
@@ -79,6 +115,7 @@ async function runLiveAgent(
     agentId: string;
     bindings: McpRegistryBindings;
   },
+  skillBundle: string,
 ): Promise<{ output: AgentOutput; telemetry: Omit<AgentTelemetry, "durationMs" | "auditLog"> & { durationMs: number } }> {
   const started = performance.now();
   const { Agent, MCPServerStreamableHttp, OpenAIProvider, Runner, mcpToFunctionTool } = await import("@openai/agents");
@@ -230,6 +267,7 @@ async function runLiveAgent(
     context.task
       ? `Active task: ${context.task.title}. Goal: ${context.task.goal}. Status: ${context.task.status}.`
       : "No active task is selected.",
+    skillBundle,
     formatUntrustedWorkspaceFiles(workspaceFiles),
     formatUntrustedUserRequest(message),
     "Respond with complete file drafts and bounded verification commands when implementation is requested. For multiple requested commands, use executions with no more than eight sequential commands. A draft or run is only a proposal and always requires approval.",
@@ -277,6 +315,19 @@ async function runLiveAgent(
         };
       } catch (error) {
         lastError = error;
+      }
+    }
+    if (requestMode === "ask" || looksLikeReadOnlyQuestion(message)) {
+      const plain = await fetchPlainChatAnswer(runtime, message);
+      if (plain) {
+        return {
+          output: buildReadOnlyFallbackProposal(plain),
+          telemetry: {
+            durationMs: Math.round(performance.now() - started),
+            tokenUsage: emptyTokenUsage(),
+            tools: mcpConnectionTools,
+          },
+        };
       }
     }
     throw lastError;
@@ -356,6 +407,11 @@ export async function POST(request: Request) {
     const workspaceFilesForAgent = retrievedContext.files.length > 0
       ? retrievedContext.files
       : input.workspaceFiles ?? [];
+    const skillResolution = await loadSkillsForAgentRequest({
+      message: input.message,
+      explicitSkillIds: input.skills,
+      taskGoal: context.task?.goal ?? null,
+    });
     const environmentBindings = getEnvironmentBindings();
     let runtime: AgentRuntimeConfig;
     try {
@@ -385,7 +441,29 @@ export async function POST(request: Request) {
     let tools: AgentToolUse[] = [];
   let engineAuditLog: AgentTelemetry["auditLog"] = [];
     try {
-      if (["pydantic-ai", "crewai", "microsoft-agent-framework", "llamaindex", "haystack", "semantic-kernel"].includes(input.engine)) {
+      if (input.engine === "conductor-native") {
+        const result = await runConductorNativeAgent({
+          runtime,
+          message: input.message,
+          mode: input.mode,
+          workspaceFiles: workspaceFilesForAgent,
+          workspace: input.workspace ?? {
+            repository: context.workspace.repository,
+            branch: context.workspace.activeBranch,
+            headSha: context.workspace.baseSha,
+          },
+          skillBundle: skillResolution.bundle,
+        });
+        output = result.output;
+        providerDurationMs = result.telemetry.durationMs;
+        tokenUsage = result.telemetry.tokenUsage;
+        tools = result.telemetry.tools;
+        engineAuditLog = [{
+          at: new Date().toISOString(),
+          stage: "conductor-native.completed",
+          detail: "Tesseract completed a bounded read-only planning loop.",
+        }];
+      } else if (["pydantic-ai", "crewai", "microsoft-agent-framework", "llamaindex", "haystack", "semantic-kernel"].includes(input.engine)) {
         const serviceUrls = {
           "pydantic-ai": environmentBindings.PYDANTIC_AI_AGENT_URL?.trim(),
           crewai: environmentBindings.CREWAI_AGENT_URL?.trim(),
@@ -424,6 +502,36 @@ export async function POST(request: Request) {
           stage: `${input.engine}.completed`,
           detail: `${input.engine} completed a native provider run.`,
         }];
+      } else if (input.engine === "openhands") {
+        const serviceUrl = environmentBindings.OPENHANDS_AGENT_URL?.trim();
+        if (!serviceUrl) throw new ApiError(503, "harness_unconfigured", "OpenHands service is not configured.");
+        const result = await runOpenHandsHarness({
+          serviceUrl,
+          runtime,
+          message: input.message,
+          mode: input.mode,
+          taskId: input.taskId,
+          workspace: input.workspace ?? {
+            repository: context.workspace.repository,
+            branch: context.workspace.activeBranch,
+            headSha: context.workspace.baseSha,
+          },
+          workspaceFiles: workspaceFilesForAgent,
+        });
+        output = result.proposal;
+        providerDurationMs = 0;
+        tools = [{
+          name: "openhands.proposal",
+          status: "completed",
+          source: "framework",
+          risk: output.needsApproval ? "write" : "read",
+          approved: false,
+        }];
+        engineAuditLog = [{
+          at: new Date().toISOString(),
+          stage: "openhands.completed",
+          detail: `OpenHands returned a Contract v2 proposal from conversation ${result.conversationId}.`,
+        }];
       } else if (input.engine === "langgraph") {
         const serviceUrl = environmentBindings.LANGGRAPH_AGENT_URL?.trim();
         if (!serviceUrl) {
@@ -451,6 +559,7 @@ export async function POST(request: Request) {
               branch: context.workspace.activeBranch,
               headSha: context.workspace.baseSha,
             },
+            skillGuides: skillResolution.bundle,
           },
         });
         output = result.output;
@@ -496,6 +605,7 @@ export async function POST(request: Request) {
             agentId: input.engine,
             bindings: environmentBindings as unknown as McpRegistryBindings,
           },
+          skillResolution.bundle,
         );
         output = result.output;
         providerDurationMs = result.telemetry.durationMs;
@@ -504,11 +614,15 @@ export async function POST(request: Request) {
       }
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      console.error("Agent provider request failed after retry", error instanceof Error ? error.message : "unknown provider error");
+      const detail = error instanceof Error ? error.message : "unknown provider error";
+      console.error("Agent provider request failed after retry", detail);
+      const structuredFailure = /structured proposal/i.test(detail);
       throw new ApiError(
         502,
-        "agent_provider_unavailable",
-        "The configured model provider did not complete the request. No proposal was generated.",
+        structuredFailure ? "agent_structured_output_invalid" : "agent_provider_unavailable",
+        structuredFailure
+          ? "The model answered but its structured proposal was invalid. Retry, switch to Ask mode, or choose another model."
+          : "The configured model provider did not complete the request. No proposal was generated.",
       );
     }
 
@@ -523,7 +637,7 @@ export async function POST(request: Request) {
       };
     }
 
-    if (input.mode === "agent") {
+    if (input.mode === "agent" && input.engine !== "openhands") {
       // If the user supplied explicit bounded command lines, bind those exact
       // lines instead of trusting a framework to paraphrase or escape them.
       const recoveredExecutions = recoverExplicitCommandBatch(input.message);
@@ -539,7 +653,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const recoveredArtifact = input.mode === "agent" && output.artifacts.length === 0
+    const recoveredArtifact = input.mode === "agent" && input.engine !== "openhands" && output.artifacts.length === 0
       ? recoverExplicitArtifact(input.message)
       : [];
     if (recoveredArtifact.length) {

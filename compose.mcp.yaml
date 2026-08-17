@@ -17,6 +17,9 @@ services:
         condition: service_started
 
   mcp-gateway:
+    # The gateway spawns MCP tool containers through the Docker API socket.
+    # Running as root keeps local Compose setups working across Docker Desktop hosts.
+    user: "0:0"
     # The gateway is included only in the operational full/benchmark profiles.
     profiles: ["full", "benchmark"]
     networks:

@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from app import _serialize_proposal
-from graph import READ_ONLY_TOOL, _mcp_gateway_url, policy_node, prepare_node
+from graph import READ_ONLY_TOOL, _mcp_gateway_url, _should_use_vllm, policy_node, prepare_node
 from models import AgentProposal, AgentRequest
 
 
@@ -132,6 +132,35 @@ class GraphPolicyTests(unittest.TestCase):
         self.assertIsNotNone(READ_ONLY_TOOL.match("search_code"))
         self.assertIsNone(READ_ONLY_TOOL.match("create_issue"))
         self.assertIsNone(READ_ONLY_TOOL.match("delete_repository"))
+
+    def test_qwen_selection_routes_to_vllm_when_azure_is_also_configured(self) -> None:
+        env = {
+            "AZURE_AI_FOUNDRY_API_KEY": "azure-key",
+            "AZURE_AI_FOUNDRY_MODEL": "gpt-5.1-codex-mini",
+            "VLLM_BASE_URL": "https://litellm.example/v1",
+            "VLLM_API_KEY": "sk-test",
+            "VLLM_MODEL": "Qwen/Qwen3.6-35B-A3B",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            self.assertTrue(_should_use_vllm("qwen3.6"))
+            self.assertFalse(_should_use_vllm("gpt-5.1-codex-mini"))
+
+    def test_read_only_fallback_proposal_is_r0(self) -> None:
+        from graph import _read_only_fallback_proposal
+
+        proposal = _read_only_fallback_proposal("กรุงเทพมหานคร")
+        self.assertEqual(proposal.riskLevel, "R0")
+        self.assertFalse(proposal.needsApproval)
+
+    def test_fresh_messages_keep_system_first(self) -> None:
+        from graph import _fresh_messages
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        messages = _fresh_messages(request(), retry=True)
+        self.assertIsInstance(messages[0], SystemMessage)
+        self.assertTrue(all(not isinstance(message, SystemMessage) for message in messages[1:]))
+        self.assertIsInstance(messages[1], HumanMessage)
+        self.assertEqual(len(messages), 3)
 
 
 if __name__ == "__main__":

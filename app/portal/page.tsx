@@ -16,13 +16,19 @@ const DEFAULT_WORKSPACE_ID = "workspace_local";
 type ModelStatus = "ready" | "configured" | "unavailable";
 type PortalTab = "chat" | "git" | "project" | "mcp" | "automations" | "benchmark";
 type AgentEngine = {
-  id: "openai-agents" | "langgraph" | "pydantic-ai" | "crewai"
+  id: "conductor-native" | "openai-agents" | "langgraph" | "pydantic-ai" | "crewai"
     | "microsoft-agent-framework" | "llamaindex" | "haystack" | "semantic-kernel";
   name: string;
+  source: string;
   status: ModelStatus;
+  class: "agentic" | "ask-only" | "retrieval";
+  toolLoop: boolean;
+  codingReady: boolean;
+  notes: string;
 };
 
 const ENGINE_LABELS: Record<AgentEngine["id"], string> = {
+  "conductor-native": "Conductor Native · Tesseract",
   "openai-agents": "OpenAI Agents SDK",
   langgraph: "LangChain + LangGraph",
   "pydantic-ai": "PydanticAI",
@@ -253,9 +259,14 @@ export default function PortalPage() {
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
-  const [engines, setEngines] = useState<AgentEngine[]>([
-    { id: "openai-agents", name: "OpenAI Agents SDK", status: "ready" },
-  ]);
+  const [skillCatalog, setSkillCatalog] = useState<Array<{
+    id: string;
+    name: string;
+    description: string;
+    disableModelInvocation: boolean;
+  }>>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [engines, setEngines] = useState<AgentEngine[]>([]);
   const [selectedEngine, setSelectedEngine] = useState<AgentEngine["id"]>("openai-agents");
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
   const [pendingContract, setPendingContract] = useState<AgentContract | null>(null);
@@ -347,11 +358,13 @@ export default function PortalPage() {
           modelStatus?: Record<string, ModelStatus>;
           engines?: AgentEngine[];
         }>),
+      fetch("/api/skills", { cache: "no-store" })
+        .then(readJson<{ catalog?: Array<{ id: string; name: string; description: string; disableModelInvocation: boolean }> }>),
       fetch(`/api/handoffs?${workspaceQuery}`, { cache: "no-store" })
         .then(readJson<{ handoffs?: HandoffRecord[] }>),
     ]);
 
-    const [healthResult, treeResult, gitResult, workspaceResult, repositoriesResult, modelResult, handoffResult] = results;
+    const [healthResult, treeResult, gitResult, workspaceResult, repositoriesResult, modelResult, skillResult, handoffResult] = results;
     const nextHealth = healthResult.status === "fulfilled"
       ? healthResult.value
       : { ok: false, error: "Local execution companion is not reachable." };
@@ -410,13 +423,20 @@ export default function PortalPage() {
         (model) => modelResult.value.modelStatus?.[model] === "ready",
       );
       setModels(options);
-      // Unavailable/configured engines are diagnostics, not selectable runtime
-      // choices. Keep them out of the UI entirely so the user cannot submit a
-      // request that the current deployment cannot execute.
-      const nextEngines = modelResult.value.engines
-        ? modelResult.value.engines.filter((engine) => engine.status === "ready")
-        : [{ id: "openai-agents" as const, name: "OpenAI Agents SDK", status: "ready" as const }];
-      setEngines(nextEngines);
+      const catalog = modelResult.value.engines
+        ? modelResult.value.engines
+        : [{
+          id: "openai-agents" as const,
+          name: "OpenAI Agents SDK",
+          status: "ready" as const,
+          class: "agentic" as const,
+          toolLoop: true,
+          codingReady: true,
+          source: "OpenAI",
+          notes: "Contract v2 proposal and approval-bound tool path.",
+        }];
+      setEngines(catalog);
+      const nextEngines = catalog.filter((engine) => engine.status === "ready" && engine.codingReady);
       setSelectedEngine((current) =>
         nextEngines.some((engine) => engine.id === current)
           ? current
@@ -425,6 +445,13 @@ export default function PortalPage() {
       const firstReady = options[0] ?? "";
       setSelectedModel((current) =>
         current && options.includes(current) ? current : firstReady,
+      );
+    }
+    if (skillResult.status === "fulfilled") {
+      const catalog = skillResult.value.catalog ?? [];
+      setSkillCatalog(catalog);
+      setSelectedSkills((current) =>
+        current.filter((skillId) => catalog.some((skill) => skill.id === skillId)),
       );
     }
     if (handoffResult.status === "fulfilled") setHandoffs(handoffResult.value.handoffs ?? []);
@@ -696,6 +723,7 @@ export default function PortalPage() {
             mode: agentMode,
             engine: selectedEngine,
             model: selectedModel,
+            skills: selectedSkills.length ? selectedSkills : undefined,
             taskId: activeTask?.id,
             workspaceId: selectedWorkspaceId,
             idempotencyKey: key,
@@ -788,6 +816,7 @@ export default function PortalPage() {
                 mode: "ask",
                 engine: engine.id,
                 model: selectedModel,
+                skills: selectedSkills.length ? selectedSkills : undefined,
                 workspaceId: selectedWorkspaceId,
                 taskId: activeTask?.id,
                 idempotencyKey: key,
@@ -1210,28 +1239,52 @@ export default function PortalPage() {
                     }}
                   />
                   <div className="composer-toolbar">
-                    <button type="button" onClick={() => void attachFiles()} disabled={!workspaceRuntimeReady}>＋ Attach repository file</button>
-                    <button type="button" className={agentMode === "ask" ? "selected" : ""} onClick={() => setAgentMode("ask")}>Ask</button>
-                    <button type="button" className={agentMode === "agent" ? "selected" : ""} onClick={() => setAgentMode("agent")}>Agent</button>
-                    <span className="context-count">{contextFiles.length} context file(s)</span>
-                    <span className="composer-spacer" />
-                    <select value={selectedEngine} onChange={(event) => setSelectedEngine(event.target.value as AgentEngine["id"])} aria-label="Select agent engine">
-                      {engines.filter((engine) => engine.status === "ready").map((engine) => (
-                        <option key={engine.id} value={engine.id}>
-                          {engine.name} · ready
-                        </option>
-                      ))}
-                    </select>
-                    <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model">
-                      {!models.length && <option value="">No ready model</option>}
-                      {models.map((model) => <option key={model} value={model}>{model} · ready</option>)}
-                    </select>
-                    <button className="send-message" type="submit" disabled={!prompt.trim() || busy || !selectedModel}>↑</button>
+                    <div className="composer-toolbar-primary">
+                      <button type="button" onClick={() => void attachFiles()} disabled={!workspaceRuntimeReady}>＋ Attach file</button>
+                      <button type="button" className={agentMode === "ask" ? "selected" : ""} onClick={() => setAgentMode("ask")}>Ask</button>
+                      <button type="button" className={agentMode === "agent" ? "selected" : ""} onClick={() => setAgentMode("agent")}>Agent</button>
+                      <span className="context-count">{contextFiles.length} context file(s)</span>
+                    </div>
+                    <div className="composer-toolbar-secondary">
+                      {engines.some((engine) => engine.status === "ready" && engine.codingReady) ? (
+                        <select value={selectedEngine} onChange={(event) => setSelectedEngine(event.target.value as AgentEngine["id"])} aria-label="Select agent engine">
+                          {engines.filter((engine) => engine.status === "ready" && engine.codingReady).map((engine) => (
+                            <option key={engine.id} value={engine.id}>
+                              {engine.name} · agentic · ready
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="context-count">No agentic engine is ready</span>
+                      )}
+                      <select
+                        value={selectedSkills[0] ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSelectedSkills(value ? [value] : []);
+                        }}
+                        aria-label="Select skill guide"
+                      >
+                        <option value="">Auto-match skills</option>
+                        {skillCatalog.map((skill) => (
+                          <option key={skill.id} value={skill.id}>
+                            {skill.id}{skill.disableModelInvocation ? " · manual" : " · auto"}
+                          </option>
+                        ))}
+                      </select>
+                      <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model">
+                        {!models.length && <option value="">No ready model</option>}
+                        {models.map((model) => <option key={model} value={model}>{model} · ready</option>)}
+                      </select>
+                      <button className="send-message" type="submit" disabled={!prompt.trim() || busy || !selectedModel}>↑</button>
+                    </div>
                   </div>
                 </form>
               </>
             )}
 
+            {activeTab !== "chat" && (
+              <div className="panel-scroll">
             {activeTab === "git" && (
               <section className="real-panel">
                 <h1>Git workspace</h1>
@@ -1348,7 +1401,7 @@ export default function PortalPage() {
                 <div className="benchmark-config">
                   <span>Model: <strong>{selectedModel || "not ready"}</strong></span>
                   <span>Context files: <strong>{benchmarkContextPaths.length || contextFiles.length}</strong></span>
-                  <span>Engines: <strong>{engines.filter((engine) => engine.status === "ready").length}</strong></span>
+                  <span>Ready engines: <strong>{engines.filter((engine) => engine.status === "ready").length}</strong></span>
                 </div>
                 {benchmarkContextPaths.length > 0 && (
                   <details className="benchmark-context">
@@ -1364,8 +1417,12 @@ export default function PortalPage() {
                     <article className={`benchmark-card ${result.ok ? "success" : "failure"}`} key={result.engine}>
                       <header>
                         <div>
-                          <strong>{result.engineName}</strong>
-                          <small>{result.model}</small>
+                            <strong>{result.engineName}</strong>
+                            <small>
+                              {result.model} · {engines.find((engine) => engine.id === result.engine)?.source ?? "unknown source"}
+                              {" · "}
+                              {engines.find((engine) => engine.id === result.engine)?.class ?? "unknown"}
+                            </small>
                         </div>
                         <span>{result.ok ? "Completed" : "Failed"}</span>
                       </header>
@@ -1448,6 +1505,8 @@ export default function PortalPage() {
                   {!workspace.recentAgentRuns?.length && <p className="empty-copy">No audited Agent run has been stored yet.</p>}
                 </section>
               </section>
+            )}
+              </div>
             )}
           </div>
 

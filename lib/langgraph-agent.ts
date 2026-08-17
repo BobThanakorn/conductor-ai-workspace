@@ -18,6 +18,7 @@ type LangGraphInput = {
     branch?: string;
     headSha?: string;
   };
+  skillGuides?: string;
 };
 
 type LangGraphResponse = {

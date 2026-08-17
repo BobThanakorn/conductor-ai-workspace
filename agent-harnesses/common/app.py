@@ -6,6 +6,7 @@ import os
 import re
 import time
 import asyncio
+import urllib.request
 from typing import Any, Literal
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
@@ -173,6 +174,48 @@ def provider_base_url() -> str:
     return endpoint if endpoint.endswith("/openai/v1") else f"{endpoint}/openai/v1"
 
 
+SENSITIVE_VALUE = re.compile(
+    r"(?i)(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[^\s,;]+|"
+    r"\b(?:sk|ghp|github_pat|xoxb|xapp)-[A-Za-z0-9_.-]{8,}\b"
+)
+
+
+def redact_model_context(value: str) -> str:
+    """Keep repository reads useful without forwarding credential material."""
+    return SENSITIVE_VALUE.sub("[REDACTED]", value)[:20_000]
+
+
+def companion_read_file(path: str) -> tuple[str, dict[str, str]]:
+    """Read through the companion's read-only boundary; never approve mutations."""
+    if not safe_workspace_path(path) or len(path) > 500:
+        raise ValueError("path must be repository-relative.")
+    base_url = os.environ.get("COMPANION_URL", "").strip().rstrip("/")
+    if not base_url:
+        raise RuntimeError("Read-only companion adapter is not configured.")
+    request = urllib.request.Request(
+        f"{base_url}/fs/read",
+        data=json.dumps({"path": path}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+        if payload.get("ok") is not True:
+            raise RuntimeError("Companion read failed.")
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError("Companion returned no file content.")
+        return redact_model_context(content), {
+            "name": "fs.read",
+            "status": "completed",
+            "source": "companion",
+            "risk": "read",
+        }
+    except Exception:
+        raise
+
+
 def responses_call(model: str, prompt: str) -> tuple[str, dict[str, int]]:
     from openai import OpenAI
 
@@ -190,23 +233,46 @@ def responses_call(model: str, prompt: str) -> tuple[str, dict[str, int]]:
     }
 
 
-async def run_pydantic_ai(request: HarnessRequest) -> tuple[str, dict[str, int]]:
+async def run_pydantic_ai(request: HarnessRequest) -> tuple[str, dict[str, int], list[dict[str, str]]]:
     from pydantic_ai import Agent
     from pydantic_ai.models.openai import OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
+
+    tool_events: list[dict[str, str]] = []
+
+    async def read_repository_file(path: str) -> str:
+        tool_events.append({"name": "fs.read", "status": "called", "source": "companion", "risk": "read"})
+        try:
+            content, event = await asyncio.to_thread(companion_read_file, path)
+            tool_events.append(event)
+            return content
+        except Exception as error:
+            tool_events.append({
+                "name": "fs.read",
+                "status": "failed",
+                "source": "companion",
+                "risk": "read",
+            })
+            raise RuntimeError(str(error)[:240]) from error
 
     model = OpenAIResponsesModel(
         request.model,
         provider=OpenAIProvider(base_url=provider_base_url(), api_key=provider_key()),
     )
-    result = await Agent(model, system_prompt=THAI_SYSTEM_PROMPT).run(contextual_message(request))
+    agent = Agent(model, system_prompt=(
+        f"{THAI_SYSTEM_PROMPT}\n"
+        "มีเครื่องมือ read_repository_file(path) สำหรับอ่านไฟล์ผ่าน read-only companion "
+        "ให้เรียกใช้เมื่อจำเป็น และห้ามพยายามเขียนไฟล์ รันคำสั่ง หรือใช้เครื่องมืออื่น\n"
+    ))
+    agent.tool_plain(read_repository_file)
+    result = await agent.run(contextual_message(request))
     usage = result.usage
     return str(result.output), {
         "requests": usage.requests,
         "inputTokens": usage.input_tokens,
         "outputTokens": usage.output_tokens,
         "totalTokens": usage.total_tokens,
-    }
+    }, tool_events
 
 
 async def run_crewai(request: HarnessRequest) -> tuple[str, dict[str, int]]:
@@ -344,8 +410,9 @@ async def run_agent(request: HarnessRequest):
     if not provider_key() or not os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT", "").strip():
         raise HTTPException(status_code=503, detail="Azure provider is not configured")
     started = time.perf_counter()
+    tool_events: list[dict[str, str]] = []
     if HARNESS_ID == "pydantic-ai":
-        answer, usage = await run_pydantic_ai(request)
+        answer, usage, tool_events = await run_pydantic_ai(request)
     elif HARNESS_ID == "crewai":
         answer, usage = await run_crewai(request)
     elif HARNESS_ID == "microsoft-agent-framework":
@@ -365,7 +432,7 @@ async def run_agent(request: HarnessRequest):
         "model": request.model,
         "answer": answer,
         "proposal": proposal,
-        "metrics": {"durationMs": round((time.perf_counter() - started) * 1000), "tokenUsage": usage, "tools": []},
+        "metrics": {"durationMs": round((time.perf_counter() - started) * 1000), "tokenUsage": usage, "tools": tool_events},
     }
 
 
