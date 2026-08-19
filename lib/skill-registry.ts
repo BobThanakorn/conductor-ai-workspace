@@ -21,22 +21,23 @@ export function skillDiscoveryRoots(): readonly string[] {
 }
 
 function parseFrontmatter(content: string): { metadata: Record<string, string>; body: string } {
-  if (!content.startsWith("---\n")) {
-    return { metadata: {}, body: content.trim() };
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!normalized.startsWith("---\n")) {
+    return { metadata: {}, body: normalized.trim() };
   }
-  const end = content.indexOf("\n---", 4);
+  const end = normalized.indexOf("\n---", 4);
   if (end === -1) {
-    return { metadata: {}, body: content.trim() };
+    return { metadata: {}, body: normalized.trim() };
   }
   const metadata: Record<string, string> = {};
-  for (const line of content.slice(4, end).split(/\r?\n/)) {
+  for (const line of normalized.slice(4, end).split("\n")) {
     const separator = line.indexOf(":");
     if (separator === -1) continue;
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim().replace(/^['"]|['"]$/g, "");
     if (key) metadata[key] = value;
   }
-  return { metadata, body: content.slice(end + 4).trim() };
+  return { metadata, body: normalized.slice(end + 4).trim() };
 }
 
 function normalizeSkillId(value: string | undefined, fallback: string): string {
@@ -65,7 +66,11 @@ export function parseSkillMarkdown(
     return null;
   }
   const disableModelInvocation = metadata["disable-model-invocation"]?.toLowerCase() !== "false";
-  const description = (metadata.description ?? body.split(/\r?\n/).find(Boolean) ?? id).trim().slice(0, 1_024);
+  const description = (
+    metadata.description
+    ?? body.split(/\r?\n/).map((line) => line.trim()).find((line) => line && line !== "---")
+    ?? id
+  ).trim().slice(0, 1_024);
   return {
     id,
     name: (metadata.name ?? id).trim().slice(0, 64),

@@ -82,15 +82,30 @@ const CAPABILITIES: Record<EngineCapability["id"], Omit<EngineCapability, "id">>
   },
 };
 
+/** Temporarily hidden from portal/benchmark until live verification passes. */
+export const ENGINE_ROLLOUT_BLOCKLIST = new Set<EngineCapability["id"]>([
+  "conductor-native",
+  "pydantic-ai",
+  "openhands",
+]);
+
+export function resolveEngineHealth(
+  id: EngineCapability["id"],
+  health: EngineHealth,
+): EngineHealth {
+  return ENGINE_ROLLOUT_BLOCKLIST.has(id) ? "unavailable" : health;
+}
+
 export function engineCapability(
   id: EngineCapability["id"],
   status: EngineHealth,
 ): EngineCapability & { status: EngineHealth; codingReady: boolean } {
   const capability = CAPABILITIES[id];
+  const resolvedStatus = resolveEngineHealth(id, status);
   return {
     id,
     ...capability,
-    status,
-    codingReady: status === "ready" && capability.class === "agentic" && capability.toolLoop,
+    status: resolvedStatus,
+    codingReady: resolvedStatus === "ready" && capability.class === "agentic" && capability.toolLoop,
   };
 }

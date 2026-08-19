@@ -59,12 +59,14 @@ export async function runExternalHarness(args: {
   message: string;
   mode: "agent" | "ask";
   workspaceFiles: Array<{ path: string; content: string }>;
+  skillBundle?: string;
 }) {
   const request = JSON.stringify({
     message: redactSensitiveText(args.message),
     mode: args.mode,
     model: args.runtime.model,
     workspace_files: args.workspaceFiles.map((file) => ({ ...file, content: redactSensitiveText(file.content) })),
+    ...(args.skillBundle ? { skill_guides: redactSensitiveText(args.skillBundle).slice(0, 28_000) } : {}),
   });
   let response: Response | undefined;
   let lastError: unknown;

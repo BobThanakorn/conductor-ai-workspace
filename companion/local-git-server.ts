@@ -17,7 +17,7 @@ import { normalizeRepositoryRelativePath } from "./workspace-path";
 import { validateContractBoundInput } from "./contract-binding";
 import { invokeReadOnlyMcpTool } from "../lib/agent-tool-adapter";
 import { normalizeAgentToolEvent, normalizeToolFailure, toolRequiresApproval } from "../lib/agent-tools";
-import { buildRepositoryIndex, retrieveRepositoryContext } from "../lib/repository-index";
+import { buildRepositoryIndex, retrieveRepositoryContext, shouldIndexRepositoryPath } from "../lib/repository-index";
 import {
   listTaskWorktrees,
   prepareTaskWorktree,
@@ -276,7 +276,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       const maxFiles = Math.min(Math.max(Number(body.maxFiles) || 8, 1), 32);
       const maxTokens = Math.min(Math.max(Number(body.maxTokens) || 12_000, 256), 64_000);
       const entries = await listWorkspace(activeRoot, ".", 6) as unknown[];
-      const paths = flattenWorkspaceFiles(entries);
+      const paths = flattenWorkspaceFiles(entries).filter((filePath) => shouldIndexRepositoryPath(filePath).ok);
       const files = [] as Array<{ path: string; content: string }>;
       for (const filePath of paths) {
         if (files.length >= 200) break;

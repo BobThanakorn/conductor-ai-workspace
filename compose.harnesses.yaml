@@ -33,13 +33,13 @@ services:
     <<: *harness
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/pydanticai.lock } }
     image: conductor-agent-pydanticai:0.1.0
-    environment: { HARNESS_ID: pydantic-ai, HARNESS_MODULE: pydantic_ai, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
+    environment: { HARNESS_ID: pydantic-ai, HARNESS_MODULE: pydantic_ai, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_API_KEY: "${AZURE_AI_FOUNDRY_API_KEY:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-microsoft-framework:
     <<: *harness
     profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/microsoft-agent-framework.lock } }
     image: conductor-agent-microsoft-framework:0.1.0
-    environment: { HARNESS_ID: microsoft-agent-framework, HARNESS_MODULE: agent_framework, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
+    environment: { HARNESS_ID: microsoft-agent-framework, HARNESS_MODULE: agent_framework, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_API_KEY: "${AZURE_AI_FOUNDRY_API_KEY:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-crewai:
     <<: *harness
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/crewai.lock } }
@@ -50,16 +50,16 @@ services:
     profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/llamaindex.lock } }
     image: conductor-agent-llamaindex:0.1.0
-    environment: { HARNESS_ID: llamaindex, HARNESS_MODULE: llama_index, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
+    environment: { HARNESS_ID: llamaindex, HARNESS_MODULE: llama_index, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_API_KEY: "${AZURE_AI_FOUNDRY_API_KEY:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-haystack:
     <<: *harness
     profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/haystack.lock } }
     image: conductor-agent-haystack:0.1.0
-    environment: { HARNESS_ID: haystack, HARNESS_MODULE: haystack, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
+    environment: { HARNESS_ID: haystack, HARNESS_MODULE: haystack, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_API_KEY: "${AZURE_AI_FOUNDRY_API_KEY:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
   agent-semantic-kernel:
     <<: *harness
     profiles: ["full", "benchmark"]
     build: { context: ./agent-harnesses, dockerfile: common/Dockerfile, args: { REQUIREMENTS: requirements/semantic-kernel.lock } }
     image: conductor-agent-semantic-kernel:0.1.0
-    environment: { HARNESS_ID: semantic-kernel, HARNESS_MODULE: semantic_kernel, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }
+    environment: { HARNESS_ID: semantic-kernel, HARNESS_MODULE: semantic_kernel, AZURE_AI_FOUNDRY_ENDPOINT: "${AZURE_AI_FOUNDRY_ENDPOINT:-}", AZURE_AI_FOUNDRY_API_KEY: "${AZURE_AI_FOUNDRY_API_KEY:-}", AZURE_AI_FOUNDRY_MODEL: "${AZURE_AI_FOUNDRY_MODEL:-gpt-5.1-codex-mini}" }

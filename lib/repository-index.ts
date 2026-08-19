@@ -17,6 +17,8 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
   "work",
   "outputs",
   "test-results",
+  "conversations",
+  "bash_events",
 ]);
 
 const EXCLUDED_FILE_NAMES = new Set([

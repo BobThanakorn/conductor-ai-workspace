@@ -88,7 +88,9 @@ export async function runConductorNativeAgent(args: {
         tool_choice: turn < 3 ? "auto" : "none",
         response_format: { type: "json_object" },
         max_tokens: 4_096,
-        chat_template_kwargs: { enable_thinking: false },
+        ...(args.runtime.provider === "openai"
+          ? { chat_template_kwargs: { enable_thinking: false } }
+          : {}),
       }),
       signal: AbortSignal.timeout(45_000),
     });

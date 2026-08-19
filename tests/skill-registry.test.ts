@@ -26,6 +26,13 @@ test("parses Cursor-style SKILL.md frontmatter", () => {
   assert.equal(skill?.disableModelInvocation, false);
 });
 
+test("parses SKILL.md frontmatter when the file uses CRLF newlines", () => {
+  const skill = parseSkillMarkdown(sampleSkill.replace(/\n/g, "\r\n"), ".cursor/skills/repo-review/SKILL.md");
+  assert.equal(skill?.id, "repo-review");
+  assert.match(skill?.description ?? "", /Review pull requests/);
+  assert.equal(skill?.disableModelInvocation, false);
+});
+
 test("resolveActiveSkills honors explicit ids and auto-match descriptions", () => {
   const catalog = [
     parseSkillMarkdown(sampleSkill, ".cursor/skills/repo-review/SKILL.md")!,

@@ -33,8 +33,10 @@ test("external harness adapter accepts a schema-valid Contract v2 proposal", asy
       message: "สร้างไฟล์",
       mode: "agent",
       workspaceFiles: [],
+      skillBundle: "<untrusted_skill_guides>[{\"id\":\"repo-review\"}]</untrusted_skill_guides>",
     });
     assert.equal(requestBody?.mode, "agent");
+    assert.match(String(requestBody?.skill_guides ?? ""), /repo-review/);
     assert.ok(result.proposal);
     assert.equal(result.proposal.artifacts[0]?.path, "hello.py");
     assert.equal(result.proposal.executions?.[0]?.command, 'python3 -c "print(1)"');

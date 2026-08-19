@@ -5,12 +5,15 @@ const baseUrl = (process.env.BENCHMARK_BASE_URL || "http://127.0.0.1:3000").repl
 const iterations = Math.max(1, Math.min(10, Number(process.env.BENCHMARK_ITERATIONS || 3)));
 const prompt = process.env.BENCHMARK_PROMPT ||
   "In Ask mode, explain in one sentence what this repository does. Do not modify files or run commands.";
-const companionUrl = (process.env.BENCHMARK_COMPANION_URL || "http://127.0.0.1:8765").replace(/\/$/, "");
+const companionUrl = (process.env.BENCHMARK_COMPANION_URL || `${baseUrl}/api/companion`).replace(/\/$/, "");
 
 const modelsResponse = await fetch(`${baseUrl}/api/models`);
 if (!modelsResponse.ok) throw new Error(`Model discovery failed (${modelsResponse.status}).`);
 const modelsPayload = await modelsResponse.json();
-const model = process.env.BENCHMARK_MODEL || modelsPayload.model;
+const readyModels = Object.entries(modelsPayload.modelStatus ?? {})
+  .filter(([, status]) => status === "ready")
+  .map(([id]) => id);
+const model = process.env.BENCHMARK_MODEL || readyModels[0] || modelsPayload.model;
 if (!model) throw new Error("No benchmark model is configured.");
 
 const readyEngines = (modelsPayload.engines || [])

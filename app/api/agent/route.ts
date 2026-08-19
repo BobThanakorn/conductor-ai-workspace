@@ -482,6 +482,7 @@ export async function POST(request: Request) {
           message: input.message,
           mode: input.mode,
           workspaceFiles: workspaceFilesForAgent,
+          skillBundle: skillResolution.bundle,
         });
         output = result.proposal ?? {
           summary: result.answer ?? "",
